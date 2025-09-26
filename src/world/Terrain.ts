@@ -1,4 +1,4 @@
-import type { Material } from '../types';
+import type { Material } from '../shared/game-types';
 import { valueNoise1D, hash01 } from '../utils/Rand';
 
 export interface TerrainProfile {

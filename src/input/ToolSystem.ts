@@ -1,4 +1,4 @@
-import type { Tool, Material } from '../types';
+import type { Tool, Material } from '../shared/game-types';
 import { strikesFor } from '../world/Materials';
 
 export class ToolSystem {
@@ -7,7 +7,16 @@ export class ToolSystem {
   targetStrikesLeft = 0;
   targetMat: Material | null = null;
 
-  toggle() { this.current = this.current === 'shovel' ? 'pickaxe' : 'shovel'; }
+  toggle() {
+    this.current = this.current === 'shovel' ? 'pickaxe' : 'shovel';
+    this.clearTarget();
+  }
+
+  set(tool: Tool) {
+    if (this.current === tool) return;
+    this.current = tool;
+    this.clearTarget();
+  }
 
   beginTarget(tileX: number, tileY: number, mat: Material) {
     this.targetTile = { x: tileX, y: tileY };

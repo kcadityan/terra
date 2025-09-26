@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
-import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../types';
-import type { Material } from '../types';
+import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../shared/game-types';
+import type { Material } from '../shared/game-types';
 import { Terrain } from './Terrain';
 import { MATERIAL_COLOR } from './Materials';
+import type { BlockChange } from '../shared/protocol';
 
 export interface Chunk {
   cx: number; // chunk index along X
@@ -208,5 +209,36 @@ export class ChunkManager {
     c.sprites[tileY][lx] = sprite;
 
     return true;
+  }
+  applyBlockChanges(changes: BlockChange[]): void {
+    for (const change of changes) {
+      const { tileX, tileY, mat } = change;
+      if (tileY < 0 || tileY >= CHUNK_H) continue;
+      const cx = Math.floor(tileX / CHUNK_W);
+      const lx = ((tileX % CHUNK_W) + CHUNK_W) % CHUNK_W;
+      const chunk = this.ensureChunk(cx);
+      const row = chunk.blocks[tileY];
+      if (!row) continue;
+
+      if (mat === 'air') {
+        row[lx] = { mat: 'air' };
+        const sprite = chunk.sprites[tileY][lx];
+        if (sprite) { sprite.destroy(); chunk.sprites[tileY][lx] = null; }
+        continue;
+      }
+
+      row[lx] = { mat };
+      let sprite = chunk.sprites[tileY][lx];
+      const worldX = (chunk.cx * CHUNK_W + lx) * TILE + TILE / 2;
+      const worldY = tileY * TILE + TILE / 2;
+      if (!sprite) {
+        sprite = this.blockGroup.create(worldX, worldY, this.rectTextureKey(mat)) as Phaser.Physics.Arcade.Image;
+        chunk.sprites[tileY][lx] = sprite;
+      } else {
+        sprite.setTexture(this.rectTextureKey(mat));
+        sprite.setPosition(worldX, worldY);
+      }
+      (sprite as any).refreshBody?.();
+    }
   }
 }

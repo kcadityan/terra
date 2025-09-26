@@ -1,11 +1,13 @@
 import Phaser from 'phaser';
-import { LOAD_RADIUS, TILE } from '../types';
+import { DEFAULT_SEED, LOAD_RADIUS, TILE, type Tool } from '../shared/game-types';
 import { ChunkManager } from '../world/ChunkManager';
 import { Player } from '../player/Player';
 import { Inventory } from '../player/Inventory';
 import { ToolSystem } from '../input/ToolSystem';
 import { strikesFor } from '../world/Materials';
-import { InventoryUI } from '../ui/InventoryUI';
+import { ToolbarUI, type ToolbarItemDescriptor } from '../ui/ToolbarUI';
+import { NetworkClient } from '../network/NetworkClient';
+import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -16,14 +18,24 @@ export default class GameScene extends Phaser.Scene {
     d: Phaser.Input.Keyboard.Key;
     w: Phaser.Input.Keyboard.Key;
     q: Phaser.Input.Keyboard.Key;
-    e: Phaser.Input.Keyboard.Key;
-    one: Phaser.Input.Keyboard.Key;
-    two: Phaser.Input.Keyboard.Key;
-    three: Phaser.Input.Keyboard.Key;
-    four: Phaser.Input.Keyboard.Key;
   };
+  private numberKeys: Phaser.Input.Keyboard.Key[] = [];
   private inv = new Inventory();
   private tools = new ToolSystem();
+  private toolbar!: ToolbarUI;
+  private toolbarItems: ToolbarItemDescriptor[] = [
+    { kind: 'tool', tool: 'shovel', label: 'Shovel' },
+    { kind: 'tool', tool: 'pickaxe', label: 'Pickaxe' },
+    { kind: 'tool', tool: 'rifle', label: 'Rifle' },
+    { kind: 'block', mat: 'grass', label: 'Grass' },
+    { kind: 'block', mat: 'dirt', label: 'Dirt' },
+    { kind: 'block', mat: 'rock', label: 'Rock' },
+    { kind: 'block', mat: 'gold', label: 'Gold' },
+  ];
+  private selectedSlot = 0;
+  private activeItem: ToolbarItemDescriptor | null = null;
+  private selectedMat: SolidMaterial | null = null;
+  private lastMiningTool: Exclude<Tool, 'rifle'> = 'shovel';
   private hudText!: Phaser.GameObjects.Text;
 
   // HUD bars
@@ -38,22 +50,27 @@ export default class GameScene extends Phaser.Scene {
   private deathInProgress = false;
   private blackoutShown = false;
 
-  // Inventory UI / selection
-  private invUI!: InventoryUI;
-  private inventoryOpen = false;
-  private selectedMat: 'grass' | 'dirt' | 'rock' | 'gold' | null = null;
+  // Projectiles
+  private bullets!: Phaser.Physics.Arcade.Group;
+  private bulletSpeed = 900;
+  private bulletLifetimeMs = 1200;
 
   // Energy drain timers
   private accumMsMove = 0;
   private accumMsIdle = 0;
   private miningNow = false;
 
+  // Networking
+  private net = new NetworkClient();
+  private selfId: string | null = null;
+  private remotePlayers = new Map<string, Player>();
+  private stateSendAccum = 0;
+
   constructor() { super('Game'); }
 
   preload() {}
 
   create() {
-    // temp 'player' texture
     if (!this.textures.exists('player')) {
       const g = this.add.graphics();
       g.fillStyle(0xffffff, 1);
@@ -62,59 +79,219 @@ export default class GameScene extends Phaser.Scene {
       g.destroy();
     }
 
-    // static group for block tiles
     this.blockGroup = this.physics.add.staticGroup();
 
-    // world + chunks
-    this.cm = new ChunkManager(this, this.blockGroup, 20250920);
+    this.cm = new ChunkManager(this, this.blockGroup, DEFAULT_SEED);
     this.cm.ensureTextures();
     for (let cx = -LOAD_RADIUS; cx <= LOAD_RADIUS; cx++) this.cm.ensureChunk(cx);
 
-    // player
     this.player = new Player(this, 0, 10 * TILE);
 
-    // keyboard
     this.keys = {
       a: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
       d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       w: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
       q: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
-      e: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E),
-      one: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ONE),
-      two: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
-      three: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.THREE),
-      four: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR),
     };
+    const digitKeyCodes = [
+      Phaser.Input.Keyboard.KeyCodes.ONE,
+      Phaser.Input.Keyboard.KeyCodes.TWO,
+      Phaser.Input.Keyboard.KeyCodes.THREE,
+      Phaser.Input.Keyboard.KeyCodes.FOUR,
+      Phaser.Input.Keyboard.KeyCodes.FIVE,
+      Phaser.Input.Keyboard.KeyCodes.SIX,
+      Phaser.Input.Keyboard.KeyCodes.SEVEN,
+      Phaser.Input.Keyboard.KeyCodes.EIGHT,
+      Phaser.Input.Keyboard.KeyCodes.NINE,
+    ];
+    this.numberKeys = digitKeyCodes.map((code) => this.input.keyboard!.addKey(code));
 
-    // mouse
     this.input.mouse?.disableContextMenu();
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onPointerDown(p));
 
-    // collisions: player vs (static) blocks
     this.physics.add.collider(this.player, this.blockGroup);
 
-    // camera + HUD
+    if (!this.textures.exists('bullet')) {
+      const g = this.add.graphics();
+      g.fillStyle(0xfff2a8, 1);
+      g.fillCircle(0, 0, 3);
+      g.generateTexture('bullet', 6, 6);
+      g.destroy();
+    }
+
+    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: false });
+
     this.cameras.main.setBackgroundColor(0x0e0e12);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
     this.hudText = this.add.text(8, 40, '', { fontSize: '14px', color: '#ffffff' }).setScrollFactor(0);
 
-    // Bars
     this.hpBg = this.add.graphics().setScrollFactor(0);
     this.hpFg = this.add.graphics().setScrollFactor(0);
     this.enBg = this.add.graphics().setScrollFactor(0);
     this.enFg = this.add.graphics().setScrollFactor(0);
     this.drawBars();
 
-    // Overlays (full-screen)
     const w = this.scale.width, h = this.scale.height;
     this.redOverlay = this.add.rectangle(0, 0, w, h, 0xdc3545, 0).setOrigin(0).setScrollFactor(0).setDepth(1000);
     this.blackOverlay = this.add.rectangle(0, 0, w, h, 0x000000, 0).setOrigin(0).setScrollFactor(0).setDepth(999);
 
-    // Inventory UI with selection callback
-    this.invUI = new InventoryUI(this, this.inv, (mat) => {
-      this.selectedMat = mat;
+    this.toolbar = new ToolbarUI(this, this.toolbarItems);
+    this.toolbar.refreshCounts(this.inv.counts);
+    this.applySlotSelection(this.selectedSlot);
+
+    this.initNetwork();
+  }
+
+  private initNetwork() {
+    this.net.on('welcome', (msg) => {
+      this.selfId = msg.selfId;
+      if (msg.seed !== DEFAULT_SEED) {
+        console.warn('[game] server seed mismatch; using local seed');
+      }
+
+      this.applyWorldChanges(msg.world);
+
+      msg.players.forEach((info) => {
+        if (info.id === this.selfId) {
+          this.hydrateSelf(info);
+        } else {
+          this.spawnRemote(info);
+        }
+      });
     });
-    this.invUI.setVisible(false);
+
+    this.net.on('playerJoined', (info) => {
+      if (info.id === this.selfId) return;
+      this.spawnRemote(info);
+    });
+
+    this.net.on('playerLeft', (id) => {
+      this.removeRemote(id);
+    });
+
+    this.net.on('playerState', ({ id, state }) => {
+      if (id === this.selfId) return;
+      this.updateRemoteState(id, state);
+    });
+
+    this.net.on('worldUpdate', (changes) => {
+      this.applyWorldChanges(changes);
+    });
+
+    this.net.on('inventoryUpdate', (msg) => {
+      if (msg.id !== this.selfId) return;
+      this.inv.setAll(msg.inventory);
+      this.toolbar.refreshCounts(this.inv.counts);
+      this.ensureValidSelection();
+    });
+
+    this.net.on('actionDenied', (reason) => {
+      console.warn('[game] action denied', reason);
+      this.tools.clearTarget();
+    });
+
+    this.net.on('playerShot', (msg) => {
+      this.onPlayerShot(msg);
+    });
+
+    this.net.connect();
+  }
+
+  private hydrateSelf(info: PlayerInit) {
+    this.player.setPosition(info.state.x, info.state.y);
+    this.player.setVelocity(info.state.vx, info.state.vy);
+    this.player.hp = info.state.hp;
+    this.player.energy = info.state.energy;
+    this.player.facing = info.state.facing;
+    this.player.setFlipX(this.player.facing < 0);
+    this.tools.current = info.state.currentTool;
+    if (info.state.currentTool === 'shovel' || info.state.currentTool === 'pickaxe') {
+      this.lastMiningTool = info.state.currentTool;
+    }
+    this.selectedMat = info.state.selectedMat;
+    this.inv.setAll(info.inventory);
+    this.toolbar.refreshCounts(this.inv.counts);
+    const slot = this.resolveSlotForState(info.state);
+    this.applySlotSelection(slot);
+    this.drawBars();
+  }
+
+  private resolveSlotForState(state: PlayerState): number {
+    if (state.selectedMat) {
+      const idx = this.toolbarItems.findIndex((item) => item.kind === 'block' && item.mat === state.selectedMat);
+      if (idx >= 0) return idx;
+    }
+    const toolIdx = this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === state.currentTool);
+    return toolIdx >= 0 ? toolIdx : 0;
+  }
+
+  private applySlotSelection(index: number) {
+    if (index < 0 || index >= this.toolbarItems.length) return;
+    this.selectedSlot = index;
+    const item = this.toolbarItems[index];
+    this.activeItem = item;
+    this.toolbar.setSelected(index);
+
+    if (item.kind === 'tool') {
+      if (item.tool === 'shovel' || item.tool === 'pickaxe') {
+        this.lastMiningTool = item.tool;
+      }
+      this.tools.set(item.tool);
+      this.selectedMat = null;
+    } else {
+      this.selectedMat = item.mat;
+      this.tools.set(this.lastMiningTool);
+    }
+  }
+
+  private ensureValidSelection() {
+    if (!this.activeItem) {
+      this.applySlotSelection(this.selectedSlot);
+      return;
+    }
+    if (this.activeItem.kind === 'block' && this.inv.counts[this.activeItem.mat] <= 0) {
+      const fallback = this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === this.lastMiningTool);
+      this.applySlotSelection(fallback >= 0 ? fallback : 0);
+    } else {
+      this.toolbar.setSelected(this.selectedSlot);
+    }
+  }
+
+  private spawnRemote(info: PlayerInit) {
+    if (this.remotePlayers.has(info.id)) {
+      this.updateRemoteState(info.id, info.state);
+      return;
+    }
+    const remote = new Player(this, info.state.x, info.state.y);
+    const body = remote.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(false);
+    body.moves = false;
+    body.enable = false;
+    remote.setTint(0x88ccff);
+    remote.setAlpha(0.9);
+    this.remotePlayers.set(info.id, remote);
+  }
+
+  private removeRemote(id: string) {
+    const p = this.remotePlayers.get(id);
+    if (!p) return;
+    p.destroy();
+    this.remotePlayers.delete(id);
+  }
+
+  private updateRemoteState(id: string, state: PlayerState) {
+    const remote = this.remotePlayers.get(id);
+    if (!remote) {
+      this.spawnRemote({ id, state, inventory: { grass: 0, dirt: 0, rock: 0, gold: 0 } });
+      return;
+    }
+    remote.setPosition(state.x, state.y);
+    remote.setFlipX(state.facing < 0);
+  }
+
+  private applyWorldChanges(changes: BlockChange[]) {
+    if (changes.length === 0) return;
+    this.cm.applyBlockChanges(changes);
   }
 
   private drawBars() {
@@ -131,7 +308,6 @@ export default class GameScene extends Phaser.Scene {
     this.enFg.clear().fillStyle(0x1e90ff, 1).fillRect(x, yEn, w * enFrac, h);
   }
 
-  // Mining (LEFT) with energy gate; Placing (RIGHT) of selected inventory item
   private onPointerDown(pointer: Phaser.Input.Pointer) {
     const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const tileX = Math.floor(worldPoint.x / TILE);
@@ -140,12 +316,16 @@ export default class GameScene extends Phaser.Scene {
     const reach = 1.5 * TILE;
     const dx = worldPoint.x - this.player.x;
     const dy = worldPoint.y - this.player.y;
-    if (Math.hypot(dx, dy) > reach) return;
+    const distance = Math.hypot(dx, dy);
 
-    // --- LEFT CLICK: mine (only if energy >= 10 and inventory UI closed) ---
-    if (pointer.leftButtonDown() && !this.inventoryOpen) {
+    if (pointer.leftButtonDown()) {
+      if (this.activeItem?.kind === 'tool' && this.activeItem.tool === 'rifle') {
+        this.fireRifle(dx, dy);
+        return;
+      }
+
+      if (distance > reach) return;
       if (this.player.energy < 10) {
-        // energy too low to mine
         this.cameras.main.flash(120, 0, 0, 0);
         return;
       }
@@ -160,7 +340,8 @@ export default class GameScene extends Phaser.Scene {
         this.tools.targetStrikesLeft = strikesFor(this.tools.current, mat);
       }
 
-      // strike!
+      if (this.tools.current === 'rifle') return;
+
       this.tools.targetStrikesLeft -= 1;
       this.player.useEnergy(5);
       this.miningNow = true;
@@ -170,44 +351,113 @@ export default class GameScene extends Phaser.Scene {
       this.drawBars();
 
       if (this.tools.targetStrikesLeft <= 0) {
-        const removed = this.cm.removeBlockAt(tileX * TILE, tileY * TILE);
-        if (removed) {
-          this.inv.add(removed.mat as any, 1);
-          this.invUI.refresh();
-          this.cm.settleAfterRemoval(removed.tileX, removed.tileY);
-        }
+        this.net.requestMine(tileX, tileY);
         this.tools.clearTarget();
       }
     }
 
-    // --- RIGHT CLICK: place selected block (if any) ---
-    if (pointer.rightButtonDown() && !this.inventoryOpen) {
+    if (pointer.rightButtonDown()) {
+      if (distance > reach) return;
       if (!this.selectedMat) return;
       if (this.inv.counts[this.selectedMat] <= 0) return;
 
-      // Don't place inside the player's body
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       const bodyRect = new Phaser.Geom.Rectangle(body.x, body.y, body.width, body.height);
       const blockRect = new Phaser.Geom.Rectangle(tileX * TILE, tileY * TILE, TILE, TILE);
       if (Phaser.Geom.Intersects.RectangleToRectangle(bodyRect, blockRect)) return;
 
-      // Place only into air
       const existing = this.cm.getBlockDataAtTile(tileX, tileY);
       if (!existing || existing.data.mat !== 'air') return;
 
-      if (this.cm.placeBlockAt(tileX, tileY, this.selectedMat)) {
-        this.inv.remove(this.selectedMat, 1);
-        this.invUI.refresh();
+      this.net.requestPlace(tileX, tileY, this.selectedMat);
+    }
+  }
+
+  private fireRifle(dx: number, dy: number) {
+    const magnitude = Math.hypot(dx, dy);
+    if (magnitude <= 0.0001) return;
+
+    const dirX = dx / magnitude;
+    const dirY = dy / magnitude;
+    const originX = this.player.x + dirX * 16;
+    const originY = this.player.y - 6 + dirY * 8;
+
+    this.player.facing = dirX < 0 ? -1 : 1;
+    this.player.setFlipX(this.player.facing < 0);
+
+    this.spawnBullet(this.selfId, originX, originY, dirX, dirY);
+    this.net.sendShoot(originX, originY, dirX, dirY);
+
+    this.player.useEnergy(5);
+    this.drawBars();
+    this.tools.clearTarget();
+  }
+
+  private spawnBullet(ownerId: string | null, originX: number, originY: number, dirX: number, dirY: number, distance?: number) {
+    const bullet = this.physics.add.image(originX, originY, 'bullet');
+    bullet.setDepth(450);
+    bullet.setActive(true);
+    bullet.setVisible(true);
+    bullet.setCollideWorldBounds(false);
+    const body = bullet.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(false);
+    body.setVelocity(dirX * this.bulletSpeed, dirY * this.bulletSpeed);
+    body.setCircle(3);
+    bullet.setData('life', distance !== undefined ? Math.min(this.bulletLifetimeMs, (distance / this.bulletSpeed) * 1000) : this.bulletLifetimeMs);
+    bullet.setData('ownerId', ownerId ?? '');
+    this.bullets.add(bullet);
+  }
+
+  private updateBullets(delta: number) {
+    const bullets = this.bullets.getChildren() as Phaser.Physics.Arcade.Image[];
+    for (const bullet of bullets) {
+      if (!bullet.active) continue;
+      const life = (bullet.getData('life') as number) - delta;
+      if (life <= 0) {
+        this.destroyBullet(bullet);
+        continue;
+      }
+      bullet.setData('life', life);
+
+      const tileX = Math.floor(bullet.x / TILE);
+      const tileY = Math.floor(bullet.y / TILE);
+      const info = this.cm.getBlockDataAtTile(tileX, tileY);
+      if (info && info.data.mat !== 'air') {
+        this.destroyBullet(bullet);
       }
     }
   }
 
-  private toggleInventory() {
-    this.inventoryOpen = !this.inventoryOpen;
-    this.invUI.setVisible(this.inventoryOpen);
-    if (this.inventoryOpen) {
-      this.invUI.refresh();
+  private destroyBullet(bullet: Phaser.Physics.Arcade.Image) {
+    this.bullets.remove(bullet, true, true);
+  }
+
+  private onPlayerShot(msg: PlayerShotMessage) {
+    if (!Number.isFinite(msg.dirX) || !Number.isFinite(msg.dirY)) return;
+
+    const ownerIsSelf = msg.shooterId === this.selfId;
+    if (!ownerIsSelf) {
+      const distance = this.estimateHitDistance(msg);
+      this.spawnBullet(msg.shooterId, msg.originX, msg.originY, msg.dirX, msg.dirY, distance ?? undefined);
     }
+
+    if (msg.hitId === this.selfId) {
+      this.player.hp = 0;
+      this.drawBars();
+      this.showRedDeathFade();
+    }
+  }
+
+  private estimateHitDistance(msg: PlayerShotMessage): number | null {
+    if (!msg.hitId) return null;
+    if (msg.hitId === this.selfId) {
+      return Phaser.Math.Distance.Between(msg.originX, msg.originY, this.player.x, this.player.y);
+    }
+    const remote = this.remotePlayers.get(msg.hitId);
+    if (remote) {
+      return Phaser.Math.Distance.Between(msg.originX, msg.originY, remote.x, remote.y);
+    }
+    return null;
   }
 
   private respawnPlayer() {
@@ -262,33 +512,31 @@ export default class GameScene extends Phaser.Scene {
   update(_time: number, delta: number) {
     const dt = delta / 1000;
 
-    // input
     const left = this.keys.a.isDown;
     const right = this.keys.d.isDown;
     const jump = this.keys.w.isDown;
-    if (Phaser.Input.Keyboard.JustDown(this.keys.q)) this.tools.toggle();
-    if (Phaser.Input.Keyboard.JustDown(this.keys.e)) this.toggleInventory();
 
-    // quick hotkeys to select placeable item (1..4)
-    if (Phaser.Input.Keyboard.JustDown(this.keys.one)) { this.selectedMat = 'grass'; this.invUI.setSelected('grass'); }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.two)) { this.selectedMat = 'dirt';  this.invUI.setSelected('dirt');  }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.three)) { this.selectedMat = 'rock';  this.invUI.setSelected('rock');  }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.four)) { this.selectedMat = 'gold';  this.invUI.setSelected('gold');  }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.q)) {
+      const nextTool = this.lastMiningTool === 'shovel' ? 'pickaxe' : 'shovel';
+      const idx = this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === nextTool);
+      if (idx >= 0) this.applySlotSelection(idx);
+    }
 
-    // movement
+    this.numberKeys.forEach((key, idx) => {
+      if (Phaser.Input.Keyboard.JustDown(key)) this.applySlotSelection(idx);
+    });
+
     const moving = (left && !right) || (right && !left);
     if (left && !right) this.player.moveLeft();
     else if (right && !left) this.player.moveRight();
     else this.player.stopH();
     if (jump) this.player.tryJump();
 
-    // inventory load effects
     const weight = this.inv.totalWeight();
     const softCap = 30;
     const speedFactor = weight <= softCap ? 1 : Math.max(0.6, 1 - (weight - softCap) / softCap);
     this.player.setLoadFactor(speedFactor);
 
-    // Energy drain / regen
     const drainFactor = 1 + Math.max(0, (weight - softCap) / softCap);
     if (moving) {
       this.accumMsMove += delta;
@@ -305,31 +553,63 @@ export default class GameScene extends Phaser.Scene {
       }
     }
 
-    // stream chunks
     const cx = this.cm.worldToChunkX(this.player.x);
     for (let i = cx - LOAD_RADIUS; i <= cx + LOAD_RADIUS; i++) this.cm.ensureChunk(i);
     this.cm.unloadFar(cx, LOAD_RADIUS);
 
-    // landing / fall damage
     const dmg = this.player.updateFallTracker();
     if (dmg > 0) {
       this.player.takeDamage(dmg);
       this.cameras.main.shake(120, 0.0025);
     }
 
-    // Death fade & respawn; energy blackout fade
+    if (this.activeItem?.kind === 'tool' && this.activeItem.tool === 'rifle') {
+      const pointer = this.input.activePointer;
+      if (pointer) {
+        const worldPoint = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+        if (worldPoint) {
+          this.player.facing = worldPoint.x < this.player.x ? -1 : 1;
+        }
+      }
+    }
+    this.player.setFlipX(this.player.facing < 0);
+
+    this.updateBullets(delta);
+
     if (this.player.hp <= 0) this.showRedDeathFade();
     this.updateBlackout();
 
-    // HUD
+    const activeLabel = this.activeItem ? this.activeItem.label : '—';
     this.hudText.setText(
-      `HP: ${this.player.hp}  Energy: ${this.player.energy}` +
-      `  Place: ${this.selectedMat ?? '—'}\n` +
-      `Weight: ${weight}  Speed: ${(speedFactor * 100) | 0}%  Inv [E]: ${this.inventoryOpen ? 'OPEN' : 'CLOSED'}`
+      `HP: ${this.player.hp}  Energy: ${this.player.energy}  Active: ${activeLabel}` +
+      `  Block: ${this.selectedMat ?? '—'}\n` +
+      `Weight: ${weight}  Speed: ${(speedFactor * 100) | 0}%`
     );
     this.drawBars();
 
-    // reset per-frame mining flag
     this.miningNow = false;
+
+    this.stateSendAccum += delta;
+    if (this.stateSendAccum >= 120) {
+      this.stateSendAccum = 0;
+      this.pushStateToServer();
+    }
+  }
+
+  private pushStateToServer() {
+    if (!this.selfId || !this.net.connected) return;
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    const payload: PlayerState = {
+      x: this.player.x,
+      y: this.player.y,
+      vx: body.velocity.x,
+      vy: body.velocity.y,
+      hp: this.player.hp,
+      energy: this.player.energy,
+      facing: this.player.facing,
+      currentTool: this.tools.current,
+      selectedMat: this.selectedMat,
+    };
+    this.net.sendState(payload);
   }
 }

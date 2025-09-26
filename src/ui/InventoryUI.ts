@@ -1,11 +1,9 @@
 import Phaser from 'phaser';
-import type { Material } from '../types';
+import type { Material } from '../shared/game-types';
 import { Inventory } from '../player/Inventory';
 
 /**
- * Simple inventory panel with draggable item icons.
- * Drag an icon outside the panel to drop (remove) one item.
- * Click an icon to select it as the \"held\" block for placement.
+ * Simple inventory panel for selecting which material to place.
  */
 export class InventoryUI {
   private scene: Phaser.Scene;
@@ -61,34 +59,13 @@ export class InventoryUI {
       const iy = 28 + row * (this.slotSize + 22);
 
       const icon = scene.add.image(ix, iy, `block_${mat}`).setDisplaySize(this.slotSize, this.slotSize).setDepth(501);
-      icon.setInteractive({ draggable: true, useHandCursor: true });
+      icon.setInteractive({ useHandCursor: true });
 
       // selection on click
       icon.on('pointerdown', () => {
         const count = this.inv.counts[mat];
         if (count <= 0) return;
         this.setSelected(this.selected === mat ? null : mat);
-      });
-
-      // drag move (local to panel)
-      icon.on('drag', (_p: any, dragX: number, dragY: number) => {
-        icon.x = dragX - this.panel.x;
-        icon.y = dragY - this.panel.y;
-      });
-
-      // drag end: if pointer is outside panel bg bounds => remove one
-      icon.on('dragend', (pointer: Phaser.Input.Pointer) => {
-        const panelBounds = this.bg.getBounds(); // screen-space because scrollFactor(0)
-        if (!Phaser.Geom.Rectangle.Contains(panelBounds, pointer.x, pointer.y)) {
-          this.inv.remove(mat, 1);
-          // if we removed the last of the selected type, clear selection
-          if (this.selected === mat && this.inv.counts[mat] === 0) this.setSelected(null);
-          this.refresh();
-        }
-        // snap back
-        const slot = this.slots.get(mat)!;
-        icon.x = slot.homeX;
-        icon.y = slot.homeY;
       });
 
       const label = scene.add

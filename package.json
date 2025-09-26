@@ -4,14 +4,26 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm:dev:client\" \"npm:dev:server\"",
+    "dev:client": "vite",
+    "dev:server": "tsx server/index.ts",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "phaser": "^3.80.0"
+    "nanoid": "^5.0.7",
+    "phaser": "^3.80.0",
+    "ws": "^8.18.0",
+    "colyseus": "^0.15.57",
+    "@colyseus/schema": "^2.0.16",
+    "@colyseus/ws-transport": "^0.15.3",
+    "colyseus.js": "^0.15.26"
   },
   "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/ws": "^8.5.10",
+    "concurrently": "^8.2.2",
+    "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.0"
   }

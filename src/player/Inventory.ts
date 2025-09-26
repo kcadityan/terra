@@ -1,4 +1,5 @@
-import type { Material } from '../types';
+import type { Material } from '../shared/game-types';
+import type { InventoryCounts } from '../shared/protocol';
 
 // Simple weights (affect speed/energy): tweak to taste
 const MAT_WEIGHT: Record<Exclude<Material, 'air'>, number> = {
@@ -24,6 +25,13 @@ export class Inventory {
 
   remove(mat: Exclude<Material, 'air'>, n = 1) {
     this.counts[mat] = Math.max(0, this.counts[mat] - n);
+  }
+
+  setAll(counts: InventoryCounts) {
+    this.counts.grass = counts.grass ?? 0;
+    this.counts.dirt = counts.dirt ?? 0;
+    this.counts.rock = counts.rock ?? 0;
+    this.counts.gold = counts.gold ?? 0;
   }
 
   totalWeight(): number {

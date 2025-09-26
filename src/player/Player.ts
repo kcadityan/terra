@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TILE } from '../types';
+import { TILE } from '../shared/game-types';
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
   facing: 1 | -1 = 1;
