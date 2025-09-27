@@ -1,5 +1,14 @@
 import Phaser from 'phaser';
-import { DEFAULT_SEED, LOAD_RADIUS, TILE, type Tool } from '../shared/game-types';
+import {
+  DEFAULT_SEED,
+  LOAD_RADIUS,
+  TILE,
+  type Tool,
+  RIFLE_RANGE_BLOCKS,
+  RIFLE_COOLDOWN_MS,
+  RIFLE_BULLET_SPEED,
+  RIFLE_BULLET_GRAVITY,
+} from '../shared/game-types';
 import { ChunkManager } from '../world/ChunkManager';
 import { Player } from '../player/Player';
 import { Inventory } from '../player/Inventory';
@@ -27,10 +36,14 @@ export default class GameScene extends Phaser.Scene {
     { kind: 'tool', tool: 'shovel', label: 'Shovel' },
     { kind: 'tool', tool: 'pickaxe', label: 'Pickaxe' },
     { kind: 'tool', tool: 'rifle', label: 'Rifle' },
-    { kind: 'block', mat: 'grass', label: 'Grass' },
     { kind: 'block', mat: 'dirt', label: 'Dirt' },
-    { kind: 'block', mat: 'rock', label: 'Rock' },
+    { kind: 'block', mat: 'rock', label: 'Stone' },
+    { kind: 'block', mat: 'wood', label: 'Wood' },
+    { kind: 'block', mat: 'coal', label: 'Coal' },
+    { kind: 'block', mat: 'copper', label: 'Copper' },
+    { kind: 'block', mat: 'silver', label: 'Silver' },
     { kind: 'block', mat: 'gold', label: 'Gold' },
+    { kind: 'block', mat: 'diamond', label: 'Diamond' },
   ];
   private selectedSlot = 0;
   private activeItem: ToolbarItemDescriptor | null = null;
@@ -49,11 +62,13 @@ export default class GameScene extends Phaser.Scene {
   private blackOverlay!: Phaser.GameObjects.Rectangle;
   private deathInProgress = false;
   private blackoutShown = false;
+  private resizeListenerAttached = false;
 
   // Projectiles
   private bullets!: Phaser.Physics.Arcade.Group;
-  private bulletSpeed = 900;
-  private bulletLifetimeMs = 1200;
+  private bulletSpeed = RIFLE_BULLET_SPEED;
+  private rifleMaxDistance = TILE * RIFLE_RANGE_BLOCKS;
+  private lastShotTime = -Infinity;
 
   // Energy drain timers
   private accumMsMove = 0;
@@ -103,6 +118,7 @@ export default class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.SEVEN,
       Phaser.Input.Keyboard.KeyCodes.EIGHT,
       Phaser.Input.Keyboard.KeyCodes.NINE,
+      Phaser.Input.Keyboard.KeyCodes.ZERO,
     ];
     this.numberKeys = digitKeyCodes.map((code) => this.input.keyboard!.addKey(code));
 
@@ -114,12 +130,12 @@ export default class GameScene extends Phaser.Scene {
     if (!this.textures.exists('bullet')) {
       const g = this.add.graphics();
       g.fillStyle(0xfff2a8, 1);
-      g.fillCircle(0, 0, 3);
-      g.generateTexture('bullet', 6, 6);
+      g.fillRect(0, 0, 12, 4);
+      g.generateTexture('bullet', 12, 4);
       g.destroy();
     }
 
-    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: false });
+    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: true });
 
     this.cameras.main.setBackgroundColor(0x0e0e12);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
@@ -131,13 +147,22 @@ export default class GameScene extends Phaser.Scene {
     this.enFg = this.add.graphics().setScrollFactor(0);
     this.drawBars();
 
-    const w = this.scale.width, h = this.scale.height;
+    const w = this.scale.width;
+    const h = this.scale.height;
     this.redOverlay = this.add.rectangle(0, 0, w, h, 0xdc3545, 0).setOrigin(0).setScrollFactor(0).setDepth(1000);
     this.blackOverlay = this.add.rectangle(0, 0, w, h, 0x000000, 0).setOrigin(0).setScrollFactor(0).setDepth(999);
 
-    this.toolbar = new ToolbarUI(this, this.toolbarItems);
+    this.toolbar = new ToolbarUI(this, this.toolbarItems, (index) => this.applySlotSelection(index));
     this.toolbar.refreshCounts(this.inv.counts);
     this.applySlotSelection(this.selectedSlot);
+
+    if (!this.resizeListenerAttached) {
+      this.scale.on('resize', this.handleResize, this);
+      this.events.once(Phaser.Scenes.Events.DESTROY, () => {
+        this.scale.off('resize', this.handleResize, this);
+      });
+      this.resizeListenerAttached = true;
+    }
 
     this.initNetwork();
   }
@@ -250,8 +275,15 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
     if (this.activeItem.kind === 'block' && this.inv.counts[this.activeItem.mat] <= 0) {
-      const fallback = this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === this.lastMiningTool);
-      this.applySlotSelection(fallback >= 0 ? fallback : 0);
+      const availableBlock = this.toolbarItems.findIndex(
+        (item) => item.kind === 'block' && this.inv.counts[item.mat] > 0,
+      );
+      if (availableBlock >= 0) {
+        this.applySlotSelection(availableBlock);
+      } else {
+        const fallback = this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === this.lastMiningTool);
+        this.applySlotSelection(fallback >= 0 ? fallback : 0);
+      }
     } else {
       this.toolbar.setSelected(this.selectedSlot);
     }
@@ -325,7 +357,7 @@ export default class GameScene extends Phaser.Scene {
       }
 
       if (distance > reach) return;
-      if (this.player.energy < 10) {
+      if (this.player.energy < 0.5) {
         this.cameras.main.flash(120, 0, 0, 0);
         return;
       }
@@ -343,7 +375,7 @@ export default class GameScene extends Phaser.Scene {
       if (this.tools.current === 'rifle') return;
 
       this.tools.targetStrikesLeft -= 1;
-      this.player.useEnergy(5);
+      this.player.useEnergy(0.5);
       this.miningNow = true;
 
       const s = info.chunk.sprites[info.by][info.bx];
@@ -377,18 +409,22 @@ export default class GameScene extends Phaser.Scene {
     const magnitude = Math.hypot(dx, dy);
     if (magnitude <= 0.0001) return;
 
+    const now = this.time.now;
+    if (now - this.lastShotTime < RIFLE_COOLDOWN_MS) return;
+    this.lastShotTime = now;
+
     const dirX = dx / magnitude;
     const dirY = dy / magnitude;
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
     const originX = this.player.x + dirX * 16;
-    const originY = this.player.y - 6 + dirY * 8;
+    const originY = body.center.y - body.height * 0.35 + dirY * 8;
 
     this.player.facing = dirX < 0 ? -1 : 1;
     this.player.setFlipX(this.player.facing < 0);
 
-    this.spawnBullet(this.selfId, originX, originY, dirX, dirY);
+    this.spawnBullet(this.selfId, originX, originY, dirX, dirY, this.rifleMaxDistance);
     this.net.sendShoot(originX, originY, dirX, dirY);
 
-    this.player.useEnergy(5);
     this.drawBars();
     this.tools.clearTarget();
   }
@@ -401,23 +437,42 @@ export default class GameScene extends Phaser.Scene {
     bullet.setCollideWorldBounds(false);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     body.setAllowGravity(false);
-    body.setVelocity(dirX * this.bulletSpeed, dirY * this.bulletSpeed);
-    body.setCircle(3);
-    bullet.setData('life', distance !== undefined ? Math.min(this.bulletLifetimeMs, (distance / this.bulletSpeed) * 1000) : this.bulletLifetimeMs);
+    const vx = dirX * this.bulletSpeed;
+    const vy = dirY * this.bulletSpeed;
+    body.setVelocity(vx, vy);
+    body.setSize(12, 4);
+    body.setOffset(0, 0);
+    const maxDistance = distance ?? this.rifleMaxDistance;
+    bullet.setData('maxDistance', maxDistance);
+    bullet.setData('startX', originX);
+    bullet.setData('startY', originY);
     bullet.setData('ownerId', ownerId ?? '');
+    bullet.setData('velX', vx);
+    bullet.setData('velY', vy);
     this.bullets.add(bullet);
   }
 
-  private updateBullets(delta: number) {
+  private updateBullets(deltaMs: number) {
+    const dt = deltaMs / 1000;
     const bullets = this.bullets.getChildren() as Phaser.Physics.Arcade.Image[];
     for (const bullet of bullets) {
       if (!bullet.active) continue;
-      const life = (bullet.getData('life') as number) - delta;
-      if (life <= 0) {
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      let vx = bullet.getData('velX') as number;
+      let vy = bullet.getData('velY') as number;
+      vy += RIFLE_BULLET_GRAVITY * dt;
+      bullet.setData('velY', vy);
+      body.setVelocity(vx, vy);
+      bullet.rotation = Math.atan2(vy, vx);
+
+      const startX = bullet.getData('startX') as number;
+      const startY = bullet.getData('startY') as number;
+      const maxDistance = bullet.getData('maxDistance') as number;
+      const travelled = Phaser.Math.Distance.Between(startX, startY, bullet.x, bullet.y);
+      if (travelled >= maxDistance) {
         this.destroyBullet(bullet);
         continue;
       }
-      bullet.setData('life', life);
 
       const tileX = Math.floor(bullet.x / TILE);
       const tileY = Math.floor(bullet.y / TILE);
@@ -438,7 +493,9 @@ export default class GameScene extends Phaser.Scene {
     const ownerIsSelf = msg.shooterId === this.selfId;
     if (!ownerIsSelf) {
       const distance = this.estimateHitDistance(msg);
-      this.spawnBullet(msg.shooterId, msg.originX, msg.originY, msg.dirX, msg.dirY, distance ?? undefined);
+      this.spawnBullet(msg.shooterId, msg.originX, msg.originY, msg.dirX, msg.dirY, distance ?? this.rifleMaxDistance);
+    } else if (msg.hitId) {
+      this.trimOwnBullet(msg);
     }
 
     if (msg.hitId === this.selfId) {
@@ -458,6 +515,31 @@ export default class GameScene extends Phaser.Scene {
       return Phaser.Math.Distance.Between(msg.originX, msg.originY, remote.x, remote.y);
     }
     return null;
+  }
+
+  private trimOwnBullet(msg: PlayerShotMessage) {
+    const bullets = this.bullets.getChildren() as Phaser.Physics.Arcade.Image[];
+    for (const bullet of bullets) {
+      if (!bullet.active) continue;
+      if ((bullet.getData('ownerId') as string) !== (this.selfId ?? '')) continue;
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      const vx = body.velocity.x;
+      const vy = body.velocity.y;
+      const speed = Math.hypot(vx, vy);
+      if (speed <= 0.0001) continue;
+      const dirX = vx / speed;
+      const dirY = vy / speed;
+      const dot = dirX * msg.dirX + dirY * msg.dirY;
+      if (dot < 0.995) continue;
+      this.destroyBullet(bullet);
+      break;
+    }
+  }
+
+  private handleResize(size: Phaser.Structs.Size) {
+    const { width, height } = size;
+    if (this.redOverlay) this.redOverlay.setDisplaySize(width, height);
+    if (this.blackOverlay) this.blackOverlay.setDisplaySize(width, height);
   }
 
   private respawnPlayer() {
@@ -523,6 +605,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.numberKeys.forEach((key, idx) => {
+      if (idx >= this.toolbarItems.length) return;
       if (Phaser.Input.Keyboard.JustDown(key)) this.applySlotSelection(idx);
     });
 
@@ -530,7 +613,10 @@ export default class GameScene extends Phaser.Scene {
     if (left && !right) this.player.moveLeft();
     else if (right && !left) this.player.moveRight();
     else this.player.stopH();
-    if (jump) this.player.tryJump();
+    if (jump) {
+      const jumped = this.player.tryJump();
+      if (jumped) this.player.useEnergy(0.3);
+    }
 
     const weight = this.inv.totalWeight();
     const softCap = 30;
@@ -541,16 +627,20 @@ export default class GameScene extends Phaser.Scene {
     if (moving) {
       this.accumMsMove += delta;
       while (this.accumMsMove >= 1000) {
-        this.player.useEnergy(1 * drainFactor);
+        this.player.useEnergy(0.2 * drainFactor);
         this.accumMsMove -= 1000;
       }
       this.accumMsIdle = 0;
     } else if (!this.miningNow) {
       this.accumMsIdle += delta;
       while (this.accumMsIdle >= 1000) {
-        this.player.gainEnergy(2);
+        this.player.gainEnergy(10);
         this.accumMsIdle -= 1000;
       }
+    }
+
+    if (this.player.energy <= 0) {
+      this.player.takeDamage(5 * dt);
     }
 
     const cx = this.cm.worldToChunkX(this.player.x);

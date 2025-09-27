@@ -1,50 +1,47 @@
 import type { Material } from '../shared/game-types';
 import type { InventoryCounts } from '../shared/protocol';
+import {
+  MATERIAL_WEIGHT,
+  SOLID_MATERIALS,
+  type SolidMaterial,
+} from '../world/Materials';
 
-// Simple weights (affect speed/energy): tweak to taste
-const MAT_WEIGHT: Record<Exclude<Material, 'air'>, number> = {
-  grass: 1,
-  dirt: 1,
-  rock: 2,
-  gold: 3,
-};
+function emptyCounts(): Record<SolidMaterial, number> {
+  const counts = {} as Record<SolidMaterial, number>;
+  for (const mat of SOLID_MATERIALS) counts[mat] = 0;
+  return counts;
+}
 
 export class Inventory {
   // Per-material counts
-  counts: Record<Exclude<Material, 'air'>, number> = {
-    grass: 0,
-    dirt: 0,
-    rock: 0,
-    gold: 0,
-  };
+  counts: Record<SolidMaterial, number> = emptyCounts();
 
   add(mat: Material, n = 1) {
     if (mat === 'air') return;
     this.counts[mat] += n;
   }
 
-  remove(mat: Exclude<Material, 'air'>, n = 1) {
+  remove(mat: SolidMaterial, n = 1) {
     this.counts[mat] = Math.max(0, this.counts[mat] - n);
   }
 
   setAll(counts: InventoryCounts) {
-    this.counts.grass = counts.grass ?? 0;
-    this.counts.dirt = counts.dirt ?? 0;
-    this.counts.rock = counts.rock ?? 0;
-    this.counts.gold = counts.gold ?? 0;
+    for (const mat of SOLID_MATERIALS) {
+      this.counts[mat] = counts[mat] ?? 0;
+    }
   }
 
   totalWeight(): number {
-    let w = 0;
-    for (const k of Object.keys(this.counts) as (keyof typeof this.counts)[]) {
-      w += this.counts[k] * MAT_WEIGHT[k];
+    let total = 0;
+    for (const mat of SOLID_MATERIALS) {
+      total += this.counts[mat] * (MATERIAL_WEIGHT[mat] ?? 1);
     }
-    return w;
+    return total;
   }
 
-  toDisplayList(): Array<{ mat: Exclude<Material, 'air'>; count: number }> {
-    return (Object.keys(this.counts) as (keyof typeof this.counts)[])
-      .map((m) => ({ mat: m, count: this.counts[m] }))
-      .filter((e) => e.count > 0);
+  toDisplayList(): Array<{ mat: SolidMaterial; count: number }> {
+    return SOLID_MATERIALS
+      .map((mat) => ({ mat, count: this.counts[mat] }))
+      .filter((entry) => entry.count > 0);
   }
 }

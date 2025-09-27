@@ -2,7 +2,12 @@ import Phaser from 'phaser';
 import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../shared/game-types';
 import type { Material } from '../shared/game-types';
 import { Terrain } from './Terrain';
-import { MATERIAL_COLOR } from './Materials';
+import {
+  MATERIAL_COLOR,
+  MATERIAL_WEIGHT,
+  MATERIAL_STICKINESS,
+  type SolidMaterial,
+} from './Materials';
 import type { BlockChange } from '../shared/protocol';
 
 export interface Chunk {
@@ -152,38 +157,90 @@ export class ChunkManager {
     const c = this.chunks.get(this.key(cx));
     if (!c) return;
 
-    // scan upwards from the tile above the removed one
-    for (let y = tileY - 1; y >= 0; y--) {
+    for (let y = tileY - 1; y >= 0; ) {
       const cell = c.blocks[y]?.[lx];
-      if (!cell || cell.mat === 'air') continue;
-
-      let ny = y;
-      while (ny + 1 < CHUNK_H && c.blocks[ny + 1][lx].mat === 'air') ny++;
-      if (ny === y) continue; // already supported
-
-      // move block data
-      const mat = cell.mat;
-      c.blocks[ny][lx] = { mat };
-      c.blocks[y][lx] = { mat: 'air' };
-
-      // move/create sprite visually (and in sprite table)
-      let s = c.sprites[y][lx];
-      if (!s) {
-        const worldX = (c.cx * CHUNK_W + lx) * TILE + TILE / 2;
-        const worldY = y * TILE + TILE / 2;
-        s = this.blockGroup.create(worldX, worldY, this.rectTextureKey(mat)) as Phaser.Physics.Arcade.Image;
+      if (!cell || cell.mat === 'air') {
+        y--;
+        continue;
       }
-      c.sprites[ny][lx] = s;
-      c.sprites[y][lx] = null;
 
-      const targetY = ny * TILE + TILE / 2;
-      this.scene.tweens.add({
-        targets: s,
-        y: targetY,
-        duration: Math.min(300, (ny - y) * 80 + 80),
-        onComplete: () => { (s as any).refreshBody?.(); }
-      });
+      const mat = cell.mat as SolidMaterial;
+      const clusterTop = this.findClusterTop(c, lx, y, mat);
+      const clusterBottom = y;
+
+      if (!this.clusterShouldFallClient(c, lx, clusterTop, clusterBottom, mat)) {
+        y = clusterTop - 1;
+        continue;
+      }
+
+      const entries: Array<{
+        mat: SolidMaterial;
+        sprite: Phaser.Physics.Arcade.Image | null;
+        offset: number;
+        startY: number;
+      }> = [];
+
+      for (let sy = clusterBottom; sy >= clusterTop; sy--) {
+        const existing = c.blocks[sy][lx].mat as SolidMaterial;
+        const sprite = c.sprites[sy][lx];
+        entries.push({ mat: existing, sprite, offset: clusterBottom - sy, startY: sy });
+        c.blocks[sy][lx] = { mat: 'air' };
+        c.sprites[sy][lx] = null;
+      }
+
+      let destBottom = clusterBottom;
+      while (destBottom + 1 < CHUNK_H && c.blocks[destBottom + 1][lx].mat === 'air') {
+        destBottom++;
+      }
+
+      for (const entry of entries) {
+        const targetY = destBottom - entry.offset;
+        c.blocks[targetY][lx] = { mat: entry.mat };
+        const worldX = (c.cx * CHUNK_W + lx) * TILE + TILE / 2;
+        const worldY = targetY * TILE + TILE / 2;
+
+        let sprite = entry.sprite;
+        if (!sprite) {
+          sprite = this.blockGroup.create(worldX, entry.startY * TILE + TILE / 2, this.rectTextureKey(entry.mat)) as Phaser.Physics.Arcade.Image;
+        } else {
+          sprite.setPosition(worldX, entry.startY * TILE + TILE / 2);
+          sprite.setTexture(this.rectTextureKey(entry.mat));
+        }
+        c.sprites[targetY][lx] = sprite;
+        const duration = Math.min(300, Math.abs(targetY - entry.startY) * 80 + 80);
+        this.scene.tweens.add({
+          targets: sprite,
+          y: worldY,
+          duration,
+          onComplete: () => { (sprite as any).refreshBody?.(); },
+        });
+      }
+
+      y = clusterTop - 1;
     }
+  }
+
+  private findClusterTop(chunk: Chunk, lx: number, startY: number, mat: SolidMaterial): number {
+    let top = startY;
+    while (top - 1 >= 0 && chunk.blocks[top - 1]?.[lx]?.mat === mat) top--;
+    return top;
+  }
+
+  private clusterShouldFallClient(chunk: Chunk, lx: number, topY: number, bottomY: number, mat: SolidMaterial): boolean {
+    const stick = MATERIAL_STICKINESS[mat] ?? 0;
+    if (stick <= 0) return true;
+
+    const clusterHeight = bottomY - topY + 1;
+    const clusterWeight = clusterHeight * (MATERIAL_WEIGHT[mat] ?? 1);
+
+    let weightAbove = 0;
+    for (let y = topY - 1; y >= 0; y--) {
+      const above = chunk.blocks[y]?.[lx];
+      if (!above || above.mat === 'air') continue;
+      weightAbove += MATERIAL_WEIGHT[above.mat as SolidMaterial] ?? 1;
+    }
+
+    return clusterWeight + weightAbove > stick;
   }
 
   /**

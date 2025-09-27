@@ -15,21 +15,42 @@ import {
   type ShootMessage,
   type PlayerShotMessage,
 } from '../../src/shared/protocol';
-import { TILE, DEFAULT_SEED } from '../../src/shared/game-types';
+import {
+  TILE,
+  CHUNK_H,
+  DEFAULT_SEED,
+  RIFLE_RANGE_BLOCKS,
+  RIFLE_COOLDOWN_MS,
+  RIFLE_BULLET_SPEED,
+  WORLD_GRAVITY,
+  RIFLE_BULLET_GRAVITY,
+} from '../../src/shared/game-types';
 import { WorldStore } from '../world-store';
 import { TerraState, PlayerSchema, BlockSchema, serializePlayers } from '../state/TerraState';
 import type { TerrainProfile } from '../../src/world/Terrain';
 
 const PLAYER_ID_LENGTH = 8;
-const RIFLE_RANGE = TILE * 25;
+const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
 const RIFLE_HIT_RADIUS = TILE * 0.8;
+const SELF_HIT_MIN_DISTANCE = TILE;
+const BULLET_STEP_SECONDS = 1 / 90;
 
 function key(tileX: number, tileY: number): string {
   return `${tileX},${tileY}`;
 }
 
 function createEmptyInventory(): InventoryCounts {
-  return { grass: 0, dirt: 0, rock: 0, gold: 0 };
+  return {
+    grass: 0,
+    dirt: 0,
+    rock: 0,
+    wood: 0,
+    coal: 0,
+    copper: 0,
+    silver: 0,
+    gold: 0,
+    diamond: 0,
+  };
 }
 
 const require = createRequire(import.meta.url);
@@ -37,6 +58,7 @@ const Colyseus = require('colyseus') as typeof import('colyseus');
 
 export class TerraRoom extends Colyseus.Room<TerraState> {
   private world!: WorldStore;
+  private lastShotAt = new Map<string, number>();
 
   onCreate() {
     const seed = DEFAULT_SEED;
@@ -90,6 +112,8 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       player: player.toPlayerInit(),
     };
     this.broadcastExcept(client, joined);
+
+    this.lastShotAt.set(client.sessionId, 0);
   }
 
   onLeave(client: Client) {
@@ -98,6 +122,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const left: ServerMessage = { type: 'player-left', id: player.id };
     this.state.players.delete(client.sessionId);
     this.broadcastExcept(client, left);
+    this.lastShotAt.delete(client.sessionId);
   }
 
   private broadcastExcept(source: Client | null, message: ServerMessage) {
@@ -171,6 +196,13 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const shooter = this.state.players.get(client.sessionId);
     if (!shooter) return;
 
+    const now = Date.now();
+    const last = this.lastShotAt.get(client.sessionId) ?? 0;
+    if (now - last < RIFLE_COOLDOWN_MS) {
+      this.sendMessage(client, { type: 'action-denied', reason: 'shoot/cooldown' });
+      return;
+    }
+
     const mag = Math.hypot(message.dirX, message.dirY);
     if (!Number.isFinite(mag) || mag <= 0.0001) return;
 
@@ -180,6 +212,8 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const originY = message.originY;
 
     const hit = this.findBulletHit(shooter, originX, originY, dirX, dirY);
+
+    this.lastShotAt.set(client.sessionId, now);
 
     const payload: PlayerShotMessage = {
       type: 'player-shot',
@@ -206,25 +240,40 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     dirX: number,
     dirY: number,
   ): PlayerSchema | null {
+    const speed = RIFLE_BULLET_SPEED;
+    const gravity = RIFLE_BULLET_GRAVITY;
+    const maxTime = (RIFLE_RANGE / speed) * 2; // generous upper bound accounting for arcs
+
     let closest: { player: PlayerSchema; distance: number } | null = null;
 
-    this.state.players.forEach((candidate) => {
-      if (candidate.id === shooter.id) return;
+    for (let t = 0; t <= maxTime; t += BULLET_STEP_SECONDS) {
+      const x = originX + dirX * speed * t;
+      const y = originY + dirY * speed * t + 0.5 * gravity * t * t;
+      const travel = Math.hypot(x - originX, y - originY);
+      if (travel > RIFLE_RANGE) break;
+      if (y > CHUNK_H * TILE || y < -TILE * 8) break;
 
-      const dx = candidate.state.x - originX;
-      const dy = candidate.state.y - originY;
-      const proj = dx * dirX + dy * dirY;
-      if (proj < 0 || proj > RIFLE_RANGE) return;
-
-      const closestX = originX + dirX * proj;
-      const closestY = originY + dirY * proj;
-      const distSq = (candidate.state.x - closestX) ** 2 + (candidate.state.y - closestY) ** 2;
-      if (distSq > RIFLE_HIT_RADIUS * RIFLE_HIT_RADIUS) return;
-
-      if (!closest || proj < closest.distance) {
-        closest = { player: candidate, distance: proj };
+      const tileX = Math.floor(x / TILE);
+      const tileY = Math.floor(y / TILE);
+      const mat = this.world.actualMaterial(tileX, tileY);
+      if (mat !== 'air') {
+        this.damageBlock(tileX, tileY);
+        break;
       }
-    });
+
+      this.state.players.forEach((candidate) => {
+        const distanceToCandidate = Math.hypot(candidate.state.x - x, candidate.state.y - y);
+        if (distanceToCandidate > RIFLE_HIT_RADIUS) return;
+
+        if (candidate.id === shooter.id && travel < SELF_HIT_MIN_DISTANCE) return;
+
+        if (!closest || travel < closest.distance) {
+          closest = { player: candidate, distance: travel };
+        }
+      });
+
+      if (closest) break;
+    }
 
     return closest ? closest.player : null;
   }
@@ -236,6 +285,13 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       state: player.state.toJSON(),
     };
     this.broadcastExcept(null, payload);
+  }
+
+  private damageBlock(tileX: number, tileY: number) {
+    const result = this.world.removeBlock(tileX, tileY);
+    if (!result) return;
+    this.applyWorldChanges(result.changes);
+    this.broadcastExcept(null, { type: 'world-update', changes: result.changes });
   }
 
   private spawnState(playerIndex: number): PlayerState {

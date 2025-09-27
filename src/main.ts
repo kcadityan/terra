@@ -1,14 +1,15 @@
 import Phaser from 'phaser';
 import GameScene from './scene/GameScene';
 
-const WIDTH = 960;
-const HEIGHT = 540;
-
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'app',
-  width: WIDTH,
-  height: HEIGHT,
+  width: window.innerWidth,
+  height: window.innerHeight,
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
   physics: {
     default: 'arcade',
     arcade: {

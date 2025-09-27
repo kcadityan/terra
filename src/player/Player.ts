@@ -39,9 +39,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   moveLeft() { this.setAccelerationX(-this.baseAccel * this.speedFactor); this.facing = -1; }
   moveRight() { this.setAccelerationX(this.baseAccel * this.speedFactor); this.facing = 1; }
   stopH() { this.setAccelerationX(0); }
-  tryJump() {
+  tryJump(): boolean {
     const onGround = (this.body as Phaser.Physics.Arcade.Body).blocked.down;
-    if (onGround) this.setVelocityY(-380);
+    if (onGround) {
+      this.setVelocityY(-380);
+      return true;
+    }
+    return false;
   }
 
   // Energy helpers

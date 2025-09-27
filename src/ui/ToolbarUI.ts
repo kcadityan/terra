@@ -23,15 +23,17 @@ const HIGHLIGHT_COLOR = '#ffffff';
 export class ToolbarUI {
   private scene: Phaser.Scene;
   private items: ToolbarItemDescriptor[];
+  private onActivate?: (index: number) => void;
   private slots: Slot[] = [];
   private selectedIndex = 0;
   private gap = 12;
   private baseY = 0;
   private cachedCounts: Inventory['counts'] | null = null;
 
-  constructor(scene: Phaser.Scene, items: ToolbarItemDescriptor[]) {
+  constructor(scene: Phaser.Scene, items: ToolbarItemDescriptor[], onActivate?: (index: number) => void) {
     this.scene = scene;
     this.items = items;
+    this.onActivate = onActivate;
     this.baseY = this.scene.scale.height - 32;
 
     this.build();
@@ -76,6 +78,8 @@ export class ToolbarUI {
       label.setPadding(8, 4, 8, 4);
       label.setScrollFactor(0);
       label.setDepth(500);
+      label.setInteractive({ useHandCursor: true });
+      label.on('pointerdown', () => this.handlePointerSelect(index));
       this.slots.push({ item, text: label });
     });
   }
@@ -97,12 +101,16 @@ export class ToolbarUI {
   }
 
   private formatLabel(index: number, item: ToolbarItemDescriptor): string {
-    const prefix = `${index + 1}`;
+    const prefix = index === 9 ? '0' : `${index + 1}`;
     if (item.kind === 'tool') {
       return `${prefix} ${item.label}`;
     }
     const counts = this.cachedCounts;
     const count = counts ? counts[item.mat] : 0;
     return `${prefix} ${item.label} (${count})`;
+  }
+
+  private handlePointerSelect(index: number) {
+    if (this.onActivate) this.onActivate(index);
   }
 }

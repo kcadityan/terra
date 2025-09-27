@@ -1,6 +1,7 @@
 import { CHUNK_H, Material } from '../src/shared/game-types';
 import { Terrain } from '../src/world/Terrain';
 import type { BlockChange, SolidMaterial } from '../src/shared/protocol';
+import { MATERIAL_WEIGHT, MATERIAL_STICKINESS } from '../src/world/Materials';
 
 function key(tileX: number, tileY: number): string {
   return `${tileX},${tileY}`;
@@ -51,25 +52,70 @@ export class WorldStore {
     this.setMaterial(tileX, tileY, 'air');
     changes.push({ tileX, tileY, mat: 'air' });
 
-    // settle column above by dropping unsupported blocks
-    for (let y = tileY - 1; y >= 0; y--) {
+    for (let y = tileY - 1; y >= 0; ) {
       const mat = this.actualMaterial(tileX, y);
-      if (mat === 'air') continue;
-
-      let ny = y;
-      while (ny + 1 < CHUNK_H && this.actualMaterial(tileX, ny + 1) === 'air') {
-        ny++;
+      if (mat === 'air') {
+        y--;
+        continue;
       }
-      if (ny === y) continue;
 
-      this.setMaterial(tileX, y, 'air');
-      this.setMaterial(tileX, ny, mat);
+      const clusterTop = this.findClusterTop(tileX, y, mat);
+      const clusterBottom = y;
 
-      changes.push({ tileX, tileY: y, mat: 'air' });
-      changes.push({ tileX, tileY: ny, mat });
+      if (!this.clusterShouldFall(tileX, clusterTop, clusterBottom, mat as SolidMaterial)) {
+        y = clusterTop - 1;
+        continue;
+      }
+
+      const removedMats: SolidMaterial[] = [];
+      for (let sy = clusterBottom; sy >= clusterTop; sy--) {
+        const existing = this.actualMaterial(tileX, sy) as SolidMaterial;
+        this.setMaterial(tileX, sy, 'air');
+        changes.push({ tileX, tileY: sy, mat: 'air' });
+        removedMats.push(existing);
+      }
+
+      let destBottom = clusterBottom;
+      while (destBottom + 1 < CHUNK_H && this.actualMaterial(tileX, destBottom + 1) === 'air') {
+        destBottom++;
+      }
+
+      for (let offset = 0; offset < removedMats.length; offset++) {
+        const targetY = destBottom - offset;
+        const material = removedMats[offset];
+        this.setMaterial(tileX, targetY, material);
+        changes.push({ tileX, tileY: targetY, mat: material });
+      }
+
+      y = clusterTop - 1;
     }
 
     return { removed: current as SolidMaterial, changes };
+  }
+
+  private findClusterTop(tileX: number, startY: number, mat: Material): number {
+    let top = startY;
+    while (top - 1 >= 0 && this.actualMaterial(tileX, top - 1) === mat) {
+      top--;
+    }
+    return top;
+  }
+
+  private clusterShouldFall(tileX: number, topY: number, bottomY: number, mat: SolidMaterial): boolean {
+    const stick = MATERIAL_STICKINESS[mat] ?? 0;
+    if (stick <= 0) return true;
+
+    const clusterHeight = bottomY - topY + 1;
+    const clusterWeight = clusterHeight * (MATERIAL_WEIGHT[mat] ?? 1);
+
+    let weightAbove = 0;
+    for (let y = topY - 1; y >= 0; y--) {
+      const aboveMat = this.actualMaterial(tileX, y);
+      if (aboveMat === 'air') continue;
+      weightAbove += MATERIAL_WEIGHT[aboveMat as SolidMaterial] ?? 1;
+    }
+
+    return clusterWeight + weightAbove > stick;
   }
 
   placeBlock(tileX: number, tileY: number, mat: SolidMaterial): BlockChange[] | null {

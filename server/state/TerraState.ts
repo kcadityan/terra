@@ -6,13 +6,23 @@ export class InventorySchema extends Schema {
   @type('number') grass = 0;
   @type('number') dirt = 0;
   @type('number') rock = 0;
+  @type('number') wood = 0;
+  @type('number') coal = 0;
+  @type('number') copper = 0;
+  @type('number') silver = 0;
   @type('number') gold = 0;
+  @type('number') diamond = 0;
 
   setFrom(inventory: InventoryCounts) {
-    this.grass = inventory.grass;
-    this.dirt = inventory.dirt;
-    this.rock = inventory.rock;
-    this.gold = inventory.gold;
+    this.grass = inventory.grass ?? 0;
+    this.dirt = inventory.dirt ?? 0;
+    this.rock = inventory.rock ?? 0;
+    this.wood = inventory.wood ?? 0;
+    this.coal = inventory.coal ?? 0;
+    this.copper = inventory.copper ?? 0;
+    this.silver = inventory.silver ?? 0;
+    this.gold = inventory.gold ?? 0;
+    this.diamond = inventory.diamond ?? 0;
   }
 
   add(mat: SolidMaterial, amount: number) {
@@ -29,7 +39,12 @@ export class InventorySchema extends Schema {
       grass: this.grass,
       dirt: this.dirt,
       rock: this.rock,
+      wood: this.wood,
+      coal: this.coal,
+      copper: this.copper,
+      silver: this.silver,
       gold: this.gold,
+      diamond: this.diamond,
     };
   }
 }
