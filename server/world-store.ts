@@ -1,15 +1,13 @@
 import { CHUNK_H, Material } from '../src/shared/game-types';
 import { Terrain } from '../src/world/Terrain';
 import type { SolidMaterial } from '../src/shared/protocol';
-import { MATERIAL_WEIGHT, MATERIAL_STICKINESS } from '../src/world/Materials';
+import { columnFromSampler, computeRemoval } from './world-rules';
 import {
   type TileCoord,
   createTileCoord,
   createTileY,
-  createRemovalDescriptor,
   createPlacementDescriptor,
   createBlockChangeDescriptor,
-  descriptorToProtocol,
 } from '../src/shared/world-primitives';
 import type { BlockChangeDescriptor } from '../src/shared/world-primitives';
 
@@ -57,55 +55,15 @@ export class WorldStore {
   }
 
   removeBlockCoord(coord: TileCoord): RemoveResult | null {
-    const current = this.actualMaterial(coord.x, coord.y);
-    if (current === 'air') return null;
+    const column = columnFromSampler((y) => this.actualMaterial(coord.x, y));
+    const outcome = computeRemoval(column, coord.x, coord.y);
+    if (!outcome) return null;
 
-    const descriptors: BlockChangeDescriptor[] = [];
-
-    this.setMaterial(coord.x, coord.y, 'air');
-    descriptors.push(createRemovalDescriptor(coord));
-
-    for (let y = coord.y - 1; y >= 0; ) {
-      const mat = this.actualMaterial(coord.x, y);
-      if (mat === 'air') {
-        y--;
-        continue;
-      }
-
-      const clusterTop = this.findClusterTop(coord.x, y, mat);
-      const clusterBottom = y;
-
-      if (!this.clusterShouldFall(coord.x, clusterTop, clusterBottom, mat as SolidMaterial)) {
-        y = clusterTop - 1;
-        continue;
-      }
-
-      const removedMats: SolidMaterial[] = [];
-      for (let sy = clusterBottom; sy >= clusterTop; sy--) {
-        const existing = this.actualMaterial(coord.x, sy) as SolidMaterial;
-        this.setMaterial(coord.x, sy, 'air');
-        const removalCoord = createTileCoord(coord.x, sy);
-        descriptors.push(createRemovalDescriptor(removalCoord));
-        removedMats.push(existing);
-      }
-
-      let destBottom = clusterBottom;
-      while (destBottom + 1 < CHUNK_H && this.actualMaterial(coord.x, destBottom + 1) === 'air') {
-        destBottom++;
-      }
-
-      for (let offset = 0; offset < removedMats.length; offset++) {
-        const targetY = destBottom - offset;
-        const material = removedMats[offset];
-        this.setMaterial(coord.x, targetY, material);
-        const placementCoord = createTileCoord(coord.x, targetY);
-        descriptors.push(createPlacementDescriptor(placementCoord, material));
-      }
-
-      y = clusterTop - 1;
+    for (const descriptor of outcome.descriptors) {
+      this.setMaterial(descriptor.coord.x, descriptor.coord.y, descriptor.material);
     }
 
-    return { removed: current as SolidMaterial, descriptors };
+    return { removed: outcome.removed, descriptors: outcome.descriptors };
   }
 
   removeBlock(tileX: number, tileY: number): RemoveResult | null {
@@ -113,30 +71,6 @@ export class WorldStore {
     return this.removeBlockCoord(coord);
   }
 
-  private findClusterTop(tileX: number, startY: number, mat: Material): number {
-    let top = startY;
-    while (top - 1 >= 0 && this.actualMaterial(tileX, top - 1) === mat) {
-      top--;
-    }
-    return top;
-  }
-
-  private clusterShouldFall(tileX: number, topY: number, bottomY: number, mat: SolidMaterial): boolean {
-    const stick = MATERIAL_STICKINESS[mat] ?? 0;
-    if (stick <= 0) return true;
-
-    const clusterHeight = bottomY - topY + 1;
-    const clusterWeight = clusterHeight * (MATERIAL_WEIGHT[mat] ?? 1);
-
-    let weightAbove = 0;
-    for (let y = topY - 1; y >= 0; y--) {
-      const aboveMat = this.actualMaterial(tileX, y);
-      if (aboveMat === 'air') continue;
-      weightAbove += MATERIAL_WEIGHT[aboveMat as SolidMaterial] ?? 1;
-    }
-
-    return clusterWeight + weightAbove > stick;
-  }
 
   placeBlockCoord(coord: TileCoord, mat: SolidMaterial): BlockChangeDescriptor[] | null {
     const current = this.actualMaterial(coord.x, coord.y);
