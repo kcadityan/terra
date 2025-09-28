@@ -17,6 +17,7 @@ import { ToolbarUI, type ToolbarItemDescriptor } from '../ui/ToolbarUI';
 import { NetworkClient } from '../network/NetworkClient';
 import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
 import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
+import { advanceEnergy } from './state/playerEnergy';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -645,24 +646,25 @@ export default class GameScene extends Phaser.Scene {
     this.player.setLoadFactor(speedFactor);
 
     const drainFactor = 1 + Math.max(0, (weight - softCap) / softCap);
-    if (moving) {
-      this.accumMsMove += delta;
-      while (this.accumMsMove >= 1000) {
-        this.player.useEnergy(0.2 * drainFactor);
-        this.accumMsMove -= 1000;
-      }
-      this.accumMsIdle = 0;
-    } else if (!this.miningNow) {
-      this.accumMsIdle += delta;
-      while (this.accumMsIdle >= 1000) {
-        this.player.gainEnergy(10);
-        this.accumMsIdle -= 1000;
-      }
-    }
+    const energyResult = advanceEnergy(
+      {
+        energy: this.player.energy,
+        hp: this.player.hp,
+        accumMoveMs: this.accumMsMove,
+        accumIdleMs: this.accumMsIdle,
+      },
+      {
+        moving,
+        mining: this.miningNow,
+        deltaMs: delta,
+        drainFactor,
+      },
+    );
 
-    if (this.player.energy <= 0) {
-      this.player.takeDamage(5 * dt);
-    }
+    this.player.energy = energyResult.energy;
+    this.player.hp = energyResult.hp;
+    this.accumMsMove = energyResult.accumMoveMs;
+    this.accumMsIdle = energyResult.accumIdleMs;
 
     const cx = this.cm.worldToChunkX(this.player.x);
     for (let i = cx - LOAD_RADIUS; i <= cx + LOAD_RADIUS; i++) this.cm.ensureChunk(i);
