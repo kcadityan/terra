@@ -1,15 +1,25 @@
 import { CHUNK_H, Material } from '../src/shared/game-types';
 import { Terrain } from '../src/world/Terrain';
-import type { BlockChange, SolidMaterial } from '../src/shared/protocol';
+import type { SolidMaterial } from '../src/shared/protocol';
 import { MATERIAL_WEIGHT, MATERIAL_STICKINESS } from '../src/world/Materials';
+import {
+  type TileCoord,
+  createTileCoord,
+  createTileY,
+  createRemovalDescriptor,
+  createPlacementDescriptor,
+  createBlockChangeDescriptor,
+  descriptorToProtocol,
+} from '../src/shared/world-primitives';
+import type { BlockChangeDescriptor } from '../src/shared/world-primitives';
 
-function key(tileX: number, tileY: number): string {
-  return `${tileX},${tileY}`;
+function key(coord: TileCoord): string {
+  return `${coord.x},${coord.y}`;
 }
 
 export interface RemoveResult {
   removed: SolidMaterial;
-  changes: BlockChange[];
+  descriptors: BlockChangeDescriptor[];
 }
 
 export class WorldStore {
@@ -25,7 +35,9 @@ export class WorldStore {
   }
 
   actualMaterial(tileX: number, tileY: number): Material {
-    const k = key(tileX, tileY);
+    if (tileY < 0 || tileY >= CHUNK_H) return 'air';
+    const coord = createTileCoord(tileX, tileY);
+    const k = key(coord);
     if (this.overrides.has(k)) {
       return this.overrides.get(k)!;
     }
@@ -33,8 +45,10 @@ export class WorldStore {
   }
 
   private setMaterial(tileX: number, tileY: number, mat: Material): void {
+    if (tileY < 0 || tileY >= CHUNK_H) return;
+    const coord = createTileCoord(tileX, tileY);
     const base = this.terrain.materialAt(tileX, tileY);
-    const k = key(tileX, tileY);
+    const k = key(coord);
     if (mat === base) {
       this.overrides.delete(k);
     } else {
@@ -42,55 +56,61 @@ export class WorldStore {
     }
   }
 
-  removeBlock(tileX: number, tileY: number): RemoveResult | null {
-    if (tileY < 0 || tileY >= CHUNK_H) return null;
-    const current = this.actualMaterial(tileX, tileY);
+  removeBlockCoord(coord: TileCoord): RemoveResult | null {
+    const current = this.actualMaterial(coord.x, coord.y);
     if (current === 'air') return null;
 
-    const changes: BlockChange[] = [];
+    const descriptors: BlockChangeDescriptor[] = [];
 
-    this.setMaterial(tileX, tileY, 'air');
-    changes.push({ tileX, tileY, mat: 'air' });
+    this.setMaterial(coord.x, coord.y, 'air');
+    descriptors.push(createRemovalDescriptor(coord));
 
-    for (let y = tileY - 1; y >= 0; ) {
-      const mat = this.actualMaterial(tileX, y);
+    for (let y = coord.y - 1; y >= 0; ) {
+      const mat = this.actualMaterial(coord.x, y);
       if (mat === 'air') {
         y--;
         continue;
       }
 
-      const clusterTop = this.findClusterTop(tileX, y, mat);
+      const clusterTop = this.findClusterTop(coord.x, y, mat);
       const clusterBottom = y;
 
-      if (!this.clusterShouldFall(tileX, clusterTop, clusterBottom, mat as SolidMaterial)) {
+      if (!this.clusterShouldFall(coord.x, clusterTop, clusterBottom, mat as SolidMaterial)) {
         y = clusterTop - 1;
         continue;
       }
 
       const removedMats: SolidMaterial[] = [];
       for (let sy = clusterBottom; sy >= clusterTop; sy--) {
-        const existing = this.actualMaterial(tileX, sy) as SolidMaterial;
-        this.setMaterial(tileX, sy, 'air');
-        changes.push({ tileX, tileY: sy, mat: 'air' });
+        const existing = this.actualMaterial(coord.x, sy) as SolidMaterial;
+        this.setMaterial(coord.x, sy, 'air');
+        const removalCoord = createTileCoord(coord.x, sy);
+        descriptors.push(createRemovalDescriptor(removalCoord));
         removedMats.push(existing);
       }
 
       let destBottom = clusterBottom;
-      while (destBottom + 1 < CHUNK_H && this.actualMaterial(tileX, destBottom + 1) === 'air') {
+      while (destBottom + 1 < CHUNK_H && this.actualMaterial(coord.x, destBottom + 1) === 'air') {
         destBottom++;
       }
 
       for (let offset = 0; offset < removedMats.length; offset++) {
         const targetY = destBottom - offset;
         const material = removedMats[offset];
-        this.setMaterial(tileX, targetY, material);
-        changes.push({ tileX, tileY: targetY, mat: material });
+        this.setMaterial(coord.x, targetY, material);
+        const placementCoord = createTileCoord(coord.x, targetY);
+        descriptors.push(createPlacementDescriptor(placementCoord, material));
       }
 
       y = clusterTop - 1;
     }
 
-    return { removed: current as SolidMaterial, changes };
+    return { removed: current as SolidMaterial, descriptors };
+  }
+
+  removeBlock(tileX: number, tileY: number): RemoveResult | null {
+    const coord = createTileCoord(tileX, tileY);
+    return this.removeBlockCoord(coord);
   }
 
   private findClusterTop(tileX: number, startY: number, mat: Material): number {
@@ -118,25 +138,32 @@ export class WorldStore {
     return clusterWeight + weightAbove > stick;
   }
 
-  placeBlock(tileX: number, tileY: number, mat: SolidMaterial): BlockChange[] | null {
-    if (tileY < 0 || tileY >= CHUNK_H) return null;
-    const current = this.actualMaterial(tileX, tileY);
+  placeBlockCoord(coord: TileCoord, mat: SolidMaterial): BlockChangeDescriptor[] | null {
+    const current = this.actualMaterial(coord.x, coord.y);
     if (current !== 'air') return null;
 
-    this.setMaterial(tileX, tileY, mat);
-    return [{ tileX, tileY, mat }];
+    this.setMaterial(coord.x, coord.y, mat);
+    return [createPlacementDescriptor(coord, mat)];
   }
 
-  setBlock(tileX: number, tileY: number, mat: Material): BlockChange[] {
+  placeBlock(tileX: number, tileY: number, mat: SolidMaterial): BlockChangeDescriptor[] | null {
+    const coord = createTileCoord(tileX, tileY);
+    return this.placeBlockCoord(coord, mat);
+  }
+
+  setBlock(tileX: number, tileY: number, mat: Material): BlockChangeDescriptor[] {
     if (tileY < 0 || tileY >= CHUNK_H) return [];
-    this.setMaterial(tileX, tileY, mat);
-    return [{ tileX, tileY, mat }];
+    const coord = createTileCoord(tileX, tileY);
+    this.setMaterial(coord.x, coord.y, mat);
+    return [createBlockChangeDescriptor(coord, mat)];
   }
 
-  snapshot(): BlockChange[] {
+  snapshotDescriptors(): BlockChangeDescriptor[] {
     return Array.from(this.overrides.entries()).map(([k, mat]) => {
       const [xStr, yStr] = k.split(',');
-      return { tileX: Number(xStr), tileY: Number(yStr), mat };
+      const tileX = Number(xStr);
+      const tileY = Number(yStr);
+      return createBlockChangeDescriptor(createTileCoord(tileX, createTileY(tileY)), mat);
     });
   }
 

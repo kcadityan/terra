@@ -28,6 +28,7 @@ import {
 import { WorldStore } from '../world-store';
 import { TerraState, PlayerSchema, BlockSchema, serializePlayers } from '../state/TerraState';
 import type { TerrainProfile } from '../../src/world/Terrain';
+import { createTileCoord, descriptorToProtocol } from '../../src/shared/world-primitives';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -95,7 +96,8 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     player.inventory.setFrom(createEmptyInventory());
     this.state.players.set(client.sessionId, player);
 
-    const snapshot = this.world.snapshot();
+    const snapshotDescriptors = this.world.snapshotDescriptors();
+    const snapshot = snapshotDescriptors.map(descriptorToProtocol);
     this.applyWorldSnapshot(snapshot);
 
     const welcome: WelcomeMessage = {
@@ -154,7 +156,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
-    const result = this.world.removeBlock(message.tileX, message.tileY);
+    let coord;
+    try {
+      coord = createTileCoord(message.tileX, message.tileY);
+    } catch {
+      this.sendMessage(client, { type: 'action-denied', reason: 'mine-block/invalid-coord' });
+      return;
+    }
+
+    const result = this.world.removeBlockCoord(coord);
     if (!result) {
       this.sendMessage(client, { type: 'action-denied', reason: 'mine-block/invalid' });
       return;
@@ -162,9 +172,11 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     player.inventory.add(result.removed, 1);
 
-    this.applyWorldChanges(result.changes);
+    const changes = result.descriptors.map(descriptorToProtocol);
 
-    this.broadcastExcept(null, { type: 'world-update', changes: result.changes });
+    this.applyWorldChanges(changes);
+
+    this.broadcastExcept(null, { type: 'world-update', changes });
     this.sendMessage(client, { type: 'inventory-update', id: player.id, inventory: player.inventory.toCounts() });
   }
 
@@ -178,7 +190,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       return;
     }
 
-    const placement = this.world.placeBlock(message.tileX, message.tileY, mat as SolidMaterial);
+    let coord;
+    try {
+      coord = createTileCoord(message.tileX, message.tileY);
+    } catch {
+      this.sendMessage(client, { type: 'action-denied', reason: 'place-block/invalid-coord' });
+      return;
+    }
+
+    const placement = this.world.placeBlockCoord(coord, mat as SolidMaterial);
     if (!placement) {
       this.sendMessage(client, { type: 'action-denied', reason: 'place-block/occupied' });
       return;
@@ -186,9 +206,11 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     player.inventory.add(mat, -1);
 
-    this.applyWorldChanges(placement);
+    const placementChanges = placement.map(descriptorToProtocol);
 
-    this.broadcastExcept(null, { type: 'world-update', changes: placement });
+    this.applyWorldChanges(placementChanges);
+
+    this.broadcastExcept(null, { type: 'world-update', changes: placementChanges });
     this.sendMessage(client, { type: 'inventory-update', id: player.id, inventory: player.inventory.toCounts() });
   }
 
@@ -288,10 +310,12 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   }
 
   private damageBlock(tileX: number, tileY: number) {
-    const result = this.world.removeBlock(tileX, tileY);
+    const coord = createTileCoord(tileX, tileY);
+    const result = this.world.removeBlockCoord(coord);
     if (!result) return;
-    this.applyWorldChanges(result.changes);
-    this.broadcastExcept(null, { type: 'world-update', changes: result.changes });
+    const changes = result.descriptors.map(descriptorToProtocol);
+    this.applyWorldChanges(changes);
+    this.broadcastExcept(null, { type: 'world-update', changes });
   }
 
   private spawnState(playerIndex: number): PlayerState {
