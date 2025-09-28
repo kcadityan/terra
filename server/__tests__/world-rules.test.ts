@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { computeRemoval, columnFromSampler } from '../world-rules';
-import { CHUNK_H } from '../../src/shared/game-types';
+import { CHUNK_H, type Material } from '../../src/shared/game-types';
 
-function columnWithSurface(): string[] {
-  const column: string[] = Array(CHUNK_H).fill('air');
+function columnWithSurface(): Material[] {
+  const column = Array<Material>(CHUNK_H).fill('air');
   column[15] = 'grass';
   for (let y = 16; y < CHUNK_H; y++) {
     column[y] = 'rock';

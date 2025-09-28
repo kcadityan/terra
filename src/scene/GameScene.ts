@@ -15,7 +15,14 @@ import { Inventory } from '../player/Inventory';
 import { ToolSystem } from '../input/ToolSystem';
 import { ToolbarUI, type ToolbarItemDescriptor } from '../ui/ToolbarUI';
 import { NetworkClient } from '../network/NetworkClient';
-import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
+import type {
+  BlockChange,
+  PlayerInit,
+  PlayerState,
+  PlayerShotMessage,
+  SolidMaterial,
+  InventoryCounts,
+} from '../shared/protocol';
 import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
 import { advanceEnergy } from './state/playerEnergy';
 import { deriveHudState } from './state/hud';
@@ -316,7 +323,7 @@ export default class GameScene extends Phaser.Scene {
   private updateRemoteState(id: string, state: PlayerState) {
     const remote = this.remotePlayers.get(id);
     if (!remote) {
-      this.spawnRemote({ id, state, inventory: { grass: 0, dirt: 0, rock: 0, gold: 0 } });
+      this.spawnRemote({ id, state, inventory: { ...EMPTY_COUNTS } });
       return;
     }
     remote.setPosition(state.x, state.y);
@@ -731,3 +738,14 @@ export default class GameScene extends Phaser.Scene {
     this.net.sendState(payload);
   }
 }
+const EMPTY_COUNTS: InventoryCounts = {
+  grass: 0,
+  dirt: 0,
+  rock: 0,
+  wood: 0,
+  coal: 0,
+  copper: 0,
+  silver: 0,
+  gold: 0,
+  diamond: 0,
+};

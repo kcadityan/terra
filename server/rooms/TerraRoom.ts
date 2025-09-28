@@ -35,6 +35,7 @@ import {
   evaluateShoot,
   evaluatePlayerJoined,
 } from '../events/terra-events';
+import { TerraEventBus } from '../events/bus';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -66,11 +67,13 @@ const Colyseus = require('colyseus') as typeof import('colyseus');
 export class TerraRoom extends Colyseus.Room<TerraState> {
   private world!: WorldStore;
   private lastShotAt = new Map<string, number>();
+  private bus = new TerraEventBus();
 
   onCreate() {
     const seed = DEFAULT_SEED;
     this.world = new WorldStore(seed);
     this.setState(new TerraState(seed));
+    this.setupEventBus();
 
     this.onMessage<ClientStateMessage>('state', (client, message) => {
       this.handleState(client, message);
@@ -90,6 +93,27 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     this.onMessage('hello', () => {
       // currently unused; reserved for future metadata
+    });
+  }
+
+  private setupEventBus() {
+    this.bus.on('world-update', ({ descriptors, source }) => {
+      this.world.applyDescriptors(descriptors);
+      const changes = descriptors.map(descriptorToProtocol);
+      this.applyWorldChanges(changes);
+      this.broadcastExcept(source ?? null, { type: 'world-update', changes });
+    });
+
+    this.bus.on('inventory-update', ({ client, playerId, counts }) => {
+      this.sendMessage(client, { type: 'inventory-update', id: playerId, inventory: counts });
+    });
+
+    this.bus.on('action-denied', ({ client, reason }) => {
+      this.sendMessage(client, { type: 'action-denied', reason });
+    });
+
+    this.bus.on('player-shot', ({ payload }) => {
+      this.broadcastExcept(null, payload);
     });
   }
 
@@ -166,27 +190,23 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     try {
       coord = createTileCoord(message.tileX, message.tileY);
     } catch {
-      this.sendMessage(client, { type: 'action-denied', reason: 'mine-block/invalid-coord' });
+      this.bus.emit('action-denied', { client, reason: 'mine-block/invalid-coord' });
       return;
     }
 
     const evaluation = evaluateMine(this.world, { type: 'mine', coord });
     if (!evaluation.ok || !evaluation.removal) {
       const reason = evaluation.reason ?? 'mine-block/invalid';
-      this.sendMessage(client, { type: 'action-denied', reason });
+      this.bus.emit('action-denied', { client, reason });
       return;
     }
 
     const { removal } = evaluation;
-    this.world.applyDescriptors(removal.descriptors);
-
     player.inventory.add(removal.removed, 1);
+    const counts = player.inventory.toCounts();
 
-    const changes = removal.descriptors.map(descriptorToProtocol);
-    this.applyWorldChanges(changes);
-
-    this.broadcastExcept(null, { type: 'world-update', changes });
-    this.sendMessage(client, { type: 'inventory-update', id: player.id, inventory: player.inventory.toCounts() });
+    this.bus.emit('world-update', { descriptors: removal.descriptors });
+    this.bus.emit('inventory-update', { client, playerId: player.id, counts });
   }
 
   private handlePlace(client: Client, message: PlaceBlockMessage) {
@@ -203,7 +223,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     try {
       coord = createTileCoord(message.tileX, message.tileY);
     } catch {
-      this.sendMessage(client, { type: 'action-denied', reason: 'place-block/invalid-coord' });
+      this.bus.emit('action-denied', { client, reason: 'place-block/invalid-coord' });
       return;
     }
 
@@ -216,19 +236,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     if (!evaluation.ok || !evaluation.descriptors) {
       const reason = evaluation.reason ?? 'place-block/occupied';
-      this.sendMessage(client, { type: 'action-denied', reason });
+      this.bus.emit('action-denied', { client, reason });
       return;
     }
 
-    this.world.applyDescriptors(evaluation.descriptors);
-
     player.inventory.add(mat, -1);
+    const counts = player.inventory.toCounts();
 
-    const placementChanges = evaluation.descriptors.map(descriptorToProtocol);
-    this.applyWorldChanges(placementChanges);
-
-    this.broadcastExcept(null, { type: 'world-update', changes: placementChanges });
-    this.sendMessage(client, { type: 'inventory-update', id: player.id, inventory: player.inventory.toCounts() });
+    this.bus.emit('world-update', { descriptors: evaluation.descriptors });
+    this.bus.emit('inventory-update', { client, playerId: player.id, counts });
   }
 
   private handleShoot(client: Client, message: ShootMessage) {
@@ -239,7 +255,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const last = this.lastShotAt.get(client.sessionId);
     const evaluation = evaluateShoot({ type: 'shoot', now, lastShotAt: last, cooldownMs: RIFLE_COOLDOWN_MS });
     if (!evaluation.ok) {
-      this.sendMessage(client, { type: 'action-denied', reason: evaluation.reason ?? 'shoot/cooldown' });
+      this.bus.emit('action-denied', { client, reason: evaluation.reason ?? 'shoot/cooldown' });
       return;
     }
 
@@ -265,7 +281,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       hitId: hit ? hit.id : null,
     };
 
-    this.broadcastExcept(null, payload);
+    this.bus.emit('player-shot', { payload });
 
     if (hit) {
       hit.state.hp = 0;
@@ -284,7 +300,8 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const gravity = RIFLE_BULLET_GRAVITY;
     const maxTime = (RIFLE_RANGE / speed) * 2; // generous upper bound accounting for arcs
 
-    let closest: { player: PlayerSchema; distance: number } | null = null;
+    let closestPlayer: PlayerSchema | null = null;
+    let closestDistance = Infinity;
 
     for (let t = 0; t <= maxTime; t += BULLET_STEP_SECONDS) {
       const x = originX + dirX * speed * t;
@@ -307,15 +324,16 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
         if (candidate.id === shooter.id && travel < SELF_HIT_MIN_DISTANCE) return;
 
-        if (!closest || travel < closest.distance) {
-          closest = { player: candidate, distance: travel };
+        if (travel < closestDistance) {
+          closestPlayer = candidate;
+          closestDistance = travel;
         }
       });
 
-      if (closest) break;
+      if (closestPlayer) break;
     }
 
-    return closest ? closest.player : null;
+    return closestPlayer;
   }
 
   private broadcastPlayerState(player: PlayerSchema) {
@@ -331,10 +349,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const coord = createTileCoord(tileX, tileY);
     const removal = this.world.prepareRemoval(coord);
     if (!removal) return;
-    this.world.applyDescriptors(removal.descriptors);
-    const changes = removal.descriptors.map(descriptorToProtocol);
-    this.applyWorldChanges(changes);
-    this.broadcastExcept(null, { type: 'world-update', changes });
+    this.bus.emit('world-update', { descriptors: removal.descriptors });
   }
 
   private spawnState(playerIndex: number): PlayerState {

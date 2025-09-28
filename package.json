@@ -9,7 +9,10 @@
     "dev:server": "tsx server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test:ci": "npm run typecheck && vitest --run",
+    "verify": "npm run typecheck && npm run test -- --run"
   },
   "dependencies": {
     "nanoid": "^5.0.7",

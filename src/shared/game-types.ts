@@ -15,6 +15,7 @@ export type Material =
   | 'grass'
   | 'dirt'
   | 'rock'
+  | 'wood'
   | 'coal'
   | 'copper'
   | 'silver'

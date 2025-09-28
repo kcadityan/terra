@@ -67,7 +67,7 @@ function isCorrectTool(tool: Tool, mat: Material): boolean {
   if (mat === 'air') return true;
   if (tool === 'shovel') return mat === 'grass' || mat === 'dirt';
   if (tool === 'pickaxe') {
-    return mat !== 'grass' && mat !== 'dirt' && mat !== 'air';
+    return mat !== 'grass' && mat !== 'dirt';
   }
   return false;
 }
