@@ -29,6 +29,12 @@ import { WorldStore } from '../world-store';
 import { TerraState, PlayerSchema, BlockSchema, serializePlayers } from '../state/TerraState';
 import type { TerrainProfile } from '../../src/world/Terrain';
 import { createTileCoord, descriptorToProtocol } from '../../src/shared/world-primitives';
+import {
+  evaluateMine,
+  evaluatePlace,
+  evaluateShoot,
+  evaluatePlayerJoined,
+} from '../events/terra-events';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -96,7 +102,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     player.inventory.setFrom(createEmptyInventory());
     this.state.players.set(client.sessionId, player);
 
-    const snapshotDescriptors = this.world.snapshotDescriptors();
+    const snapshotDescriptors = evaluatePlayerJoined(this.world);
     const snapshot = snapshotDescriptors.map(descriptorToProtocol);
     this.applyWorldSnapshot(snapshot);
 
@@ -164,16 +170,19 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       return;
     }
 
-    const result = this.world.removeBlockCoord(coord);
-    if (!result) {
-      this.sendMessage(client, { type: 'action-denied', reason: 'mine-block/invalid' });
+    const evaluation = evaluateMine(this.world, { type: 'mine', coord });
+    if (!evaluation.ok || !evaluation.removal) {
+      const reason = evaluation.reason ?? 'mine-block/invalid';
+      this.sendMessage(client, { type: 'action-denied', reason });
       return;
     }
 
-    player.inventory.add(result.removed, 1);
+    const { removal } = evaluation;
+    this.world.applyDescriptors(removal.descriptors);
 
-    const changes = result.descriptors.map(descriptorToProtocol);
+    player.inventory.add(removal.removed, 1);
 
+    const changes = removal.descriptors.map(descriptorToProtocol);
     this.applyWorldChanges(changes);
 
     this.broadcastExcept(null, { type: 'world-update', changes });
@@ -198,16 +207,24 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       return;
     }
 
-    const placement = this.world.placeBlockCoord(coord, mat as SolidMaterial);
-    if (!placement) {
-      this.sendMessage(client, { type: 'action-denied', reason: 'place-block/occupied' });
+    const evaluation = evaluatePlace(this.world, {
+      type: 'place',
+      coord,
+      material: mat as SolidMaterial,
+      inventory: player.inventory.toCounts(),
+    });
+
+    if (!evaluation.ok || !evaluation.descriptors) {
+      const reason = evaluation.reason ?? 'place-block/occupied';
+      this.sendMessage(client, { type: 'action-denied', reason });
       return;
     }
 
+    this.world.applyDescriptors(evaluation.descriptors);
+
     player.inventory.add(mat, -1);
 
-    const placementChanges = placement.map(descriptorToProtocol);
-
+    const placementChanges = evaluation.descriptors.map(descriptorToProtocol);
     this.applyWorldChanges(placementChanges);
 
     this.broadcastExcept(null, { type: 'world-update', changes: placementChanges });
@@ -219,9 +236,10 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     if (!shooter) return;
 
     const now = Date.now();
-    const last = this.lastShotAt.get(client.sessionId) ?? 0;
-    if (now - last < RIFLE_COOLDOWN_MS) {
-      this.sendMessage(client, { type: 'action-denied', reason: 'shoot/cooldown' });
+    const last = this.lastShotAt.get(client.sessionId);
+    const evaluation = evaluateShoot({ type: 'shoot', now, lastShotAt: last, cooldownMs: RIFLE_COOLDOWN_MS });
+    if (!evaluation.ok) {
+      this.sendMessage(client, { type: 'action-denied', reason: evaluation.reason ?? 'shoot/cooldown' });
       return;
     }
 
@@ -311,9 +329,10 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
   private damageBlock(tileX: number, tileY: number) {
     const coord = createTileCoord(tileX, tileY);
-    const result = this.world.removeBlockCoord(coord);
-    if (!result) return;
-    const changes = result.descriptors.map(descriptorToProtocol);
+    const removal = this.world.prepareRemoval(coord);
+    if (!removal) return;
+    this.world.applyDescriptors(removal.descriptors);
+    const changes = removal.descriptors.map(descriptorToProtocol);
     this.applyWorldChanges(changes);
     this.broadcastExcept(null, { type: 'world-update', changes });
   }

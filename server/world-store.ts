@@ -1,7 +1,7 @@
 import { CHUNK_H, Material } from '../src/shared/game-types';
 import { Terrain } from '../src/world/Terrain';
 import type { SolidMaterial } from '../src/shared/protocol';
-import { columnFromSampler, computeRemoval } from './world-rules';
+import { columnFromSampler, computeRemoval, type RemovalComputation } from './world-rules';
 import {
   type TileCoord,
   createTileCoord,
@@ -54,15 +54,21 @@ export class WorldStore {
     }
   }
 
-  removeBlockCoord(coord: TileCoord): RemoveResult | null {
+  prepareRemoval(coord: TileCoord): RemovalComputation | null {
     const column = columnFromSampler((y) => this.actualMaterial(coord.x, y));
-    const outcome = computeRemoval(column, coord.x, coord.y);
-    if (!outcome) return null;
+    return computeRemoval(column, coord.x, coord.y);
+  }
 
-    for (const descriptor of outcome.descriptors) {
+  applyDescriptors(descriptors: BlockChangeDescriptor[]): void {
+    for (const descriptor of descriptors) {
       this.setMaterial(descriptor.coord.x, descriptor.coord.y, descriptor.material);
     }
+  }
 
+  removeBlockCoord(coord: TileCoord): RemoveResult | null {
+    const outcome = this.prepareRemoval(coord);
+    if (!outcome) return null;
+    this.applyDescriptors(outcome.descriptors);
     return { removed: outcome.removed, descriptors: outcome.descriptors };
   }
 
@@ -72,12 +78,17 @@ export class WorldStore {
   }
 
 
-  placeBlockCoord(coord: TileCoord, mat: SolidMaterial): BlockChangeDescriptor[] | null {
+  preparePlacement(coord: TileCoord, mat: SolidMaterial): BlockChangeDescriptor[] | null {
     const current = this.actualMaterial(coord.x, coord.y);
     if (current !== 'air') return null;
-
-    this.setMaterial(coord.x, coord.y, mat);
     return [createPlacementDescriptor(coord, mat)];
+  }
+
+  placeBlockCoord(coord: TileCoord, mat: SolidMaterial): BlockChangeDescriptor[] | null {
+    const descriptors = this.preparePlacement(coord, mat);
+    if (!descriptors) return null;
+    this.applyDescriptors(descriptors);
+    return descriptors;
   }
 
   placeBlock(tileX: number, tileY: number, mat: SolidMaterial): BlockChangeDescriptor[] | null {
@@ -88,8 +99,9 @@ export class WorldStore {
   setBlock(tileX: number, tileY: number, mat: Material): BlockChangeDescriptor[] {
     if (tileY < 0 || tileY >= CHUNK_H) return [];
     const coord = createTileCoord(tileX, tileY);
-    this.setMaterial(coord.x, coord.y, mat);
-    return [createBlockChangeDescriptor(coord, mat)];
+    const descriptor = createBlockChangeDescriptor(coord, mat);
+    this.applyDescriptors([descriptor]);
+    return [descriptor];
   }
 
   snapshotDescriptors(): BlockChangeDescriptor[] {

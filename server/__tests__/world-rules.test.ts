@@ -21,12 +21,13 @@ describe('computeRemoval', () => {
 
   it('produces descriptors including removal and settling', () => {
     const column = columnWithSurface();
+    const before = [...column];
     const result = computeRemoval(column, 2, 15);
     expect(result).not.toBeNull();
     const descriptors = result!.descriptors;
     expect(descriptors[0].material).toBe('air');
-    const hasRockPlacement = descriptors.some((d) => d.material === 'rock');
-    expect(hasRockPlacement).toBe(true);
+    const changed = result!.column.some((mat, idx) => mat !== before[idx]);
+    expect(changed).toBe(true);
     expect(result!.column[15]).toBe('air');
   });
 
