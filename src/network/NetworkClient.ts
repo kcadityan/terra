@@ -8,6 +8,13 @@ import {
   type ServerMessage,
   type WelcomeMessage,
   type PlayerShotMessage,
+  type NPCSpawnMessage,
+  type NPCStateMessage,
+  type NPCRemoveMessage,
+  type NPCShotMessage,
+  type PlayerRespawnMessage,
+  type TimeOfDayInfo,
+  type CurrencyUpdateMessage,
 } from '../shared/protocol';
 
 interface EventMap {
@@ -17,9 +24,16 @@ interface EventMap {
   playerState: { id: string; state: PlayerState };
   worldUpdate: BlockChange[];
   inventoryUpdate: InventoryUpdateMessage;
+  currencyUpdate: CurrencyUpdateMessage['amount'];
   actionDenied: string;
   disconnected: void;
   playerShot: PlayerShotMessage;
+  npcSpawn: NPCSpawnMessage['npc'];
+  npcState: NPCStateMessage['npc'];
+  npcRemove: NPCRemoveMessage['id'];
+  npcShot: NPCShotMessage;
+  playerRespawn: PlayerRespawnMessage;
+  timeOfDay: TimeOfDayInfo;
 }
 
 type Listener<K extends keyof EventMap> = (payload: EventMap[K]) => void;
@@ -35,9 +49,16 @@ export class NetworkClient {
     playerState: new Set<Listener<'playerState'>>(),
     worldUpdate: new Set<Listener<'worldUpdate'>>(),
     inventoryUpdate: new Set<Listener<'inventoryUpdate'>>(),
+    currencyUpdate: new Set<Listener<'currencyUpdate'>>(),
     actionDenied: new Set<Listener<'actionDenied'>>(),
     disconnected: new Set<Listener<'disconnected'>>(),
     playerShot: new Set<Listener<'playerShot'>>(),
+    npcSpawn: new Set<Listener<'npcSpawn'>>(),
+    npcState: new Set<Listener<'npcState'>>(),
+    npcRemove: new Set<Listener<'npcRemove'>>(),
+    npcShot: new Set<Listener<'npcShot'>>(),
+    playerRespawn: new Set<Listener<'playerRespawn'>>(),
+    timeOfDay: new Set<Listener<'timeOfDay'>>(),
   } as { [K in keyof EventMap]: Set<Listener<K>> };
 
   selfId: string | null = null;
@@ -168,8 +189,36 @@ export class NetworkClient {
         this.emit('inventoryUpdate', msg);
         break;
       }
+      case 'currency-update': {
+        this.emit('currencyUpdate', msg.amount);
+        break;
+      }
       case 'player-shot': {
         this.emit('playerShot', msg);
+        break;
+      }
+      case 'npc-spawn': {
+        this.emit('npcSpawn', msg.npc);
+        break;
+      }
+      case 'npc-state': {
+        this.emit('npcState', msg.npc);
+        break;
+      }
+      case 'npc-remove': {
+        this.emit('npcRemove', msg.id);
+        break;
+      }
+      case 'npc-shot': {
+        this.emit('npcShot', msg);
+        break;
+      }
+      case 'player-respawn': {
+        this.emit('playerRespawn', msg);
+        break;
+      }
+      case 'time-of-day': {
+        this.emit('timeOfDay', msg.info);
         break;
       }
       case 'action-denied': {

@@ -2,12 +2,7 @@ import Phaser from 'phaser';
 import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../shared/game-types';
 import type { Material } from '../shared/game-types';
 import { Terrain } from './Terrain';
-import {
-  MATERIAL_COLOR,
-  MATERIAL_WEIGHT,
-  MATERIAL_STICKINESS,
-  type SolidMaterial,
-} from './Materials';
+import { MATERIAL_COLOR } from './Materials';
 import type { BlockChange } from '../shared/protocol';
 
 export interface Chunk {
@@ -21,6 +16,7 @@ export class ChunkManager {
   blockGroup: Phaser.Physics.Arcade.StaticGroup;
   terrain: Terrain;
   chunks = new Map<ChunkKey, Chunk>();
+  private overrides = new Map<string, Material>();
 
   constructor(scene: Phaser.Scene, blockGroup: Phaser.Physics.Arcade.StaticGroup, seed = 1337) {
     this.scene = scene;
@@ -59,6 +55,7 @@ export class ChunkManager {
     c = { cx, blocks, sprites };
     this.chunks.set(k, c);
 
+    this.applyStoredOverrides(c);
     this.bakeChunkSprites(c);
     return c;
   }
@@ -113,6 +110,7 @@ export class ChunkManager {
     if (!b || b.mat === 'air') return null;
 
     c.blocks[ly][lx] = { mat: 'air' };
+    this.recordOverride(tileX, tileY, 'air');
     const s = c.sprites[ly][lx];
     if (s) { s.destroy(); c.sprites[ly][lx] = null; }
     return { mat: b.mat, tileX, tileY };
@@ -157,90 +155,7 @@ export class ChunkManager {
     const c = this.chunks.get(this.key(cx));
     if (!c) return;
 
-    for (let y = tileY - 1; y >= 0; ) {
-      const cell = c.blocks[y]?.[lx];
-      if (!cell || cell.mat === 'air') {
-        y--;
-        continue;
-      }
-
-      const mat = cell.mat as SolidMaterial;
-      const clusterTop = this.findClusterTop(c, lx, y, mat);
-      const clusterBottom = y;
-
-      if (!this.clusterShouldFallClient(c, lx, clusterTop, clusterBottom, mat)) {
-        y = clusterTop - 1;
-        continue;
-      }
-
-      const entries: Array<{
-        mat: SolidMaterial;
-        sprite: Phaser.Physics.Arcade.Image | null;
-        offset: number;
-        startY: number;
-      }> = [];
-
-      for (let sy = clusterBottom; sy >= clusterTop; sy--) {
-        const existing = c.blocks[sy][lx].mat as SolidMaterial;
-        const sprite = c.sprites[sy][lx];
-        entries.push({ mat: existing, sprite, offset: clusterBottom - sy, startY: sy });
-        c.blocks[sy][lx] = { mat: 'air' };
-        c.sprites[sy][lx] = null;
-      }
-
-      let destBottom = clusterBottom;
-      while (destBottom + 1 < CHUNK_H && c.blocks[destBottom + 1][lx].mat === 'air') {
-        destBottom++;
-      }
-
-      for (const entry of entries) {
-        const targetY = destBottom - entry.offset;
-        c.blocks[targetY][lx] = { mat: entry.mat };
-        const worldX = (c.cx * CHUNK_W + lx) * TILE + TILE / 2;
-        const worldY = targetY * TILE + TILE / 2;
-
-        let sprite = entry.sprite;
-        if (!sprite) {
-          sprite = this.blockGroup.create(worldX, entry.startY * TILE + TILE / 2, this.rectTextureKey(entry.mat)) as Phaser.Physics.Arcade.Image;
-        } else {
-          sprite.setPosition(worldX, entry.startY * TILE + TILE / 2);
-          sprite.setTexture(this.rectTextureKey(entry.mat));
-        }
-        c.sprites[targetY][lx] = sprite;
-        const duration = Math.min(300, Math.abs(targetY - entry.startY) * 80 + 80);
-        this.scene.tweens.add({
-          targets: sprite,
-          y: worldY,
-          duration,
-          onComplete: () => { (sprite as any).refreshBody?.(); },
-        });
-      }
-
-      y = clusterTop - 1;
-    }
-  }
-
-  private findClusterTop(chunk: Chunk, lx: number, startY: number, mat: SolidMaterial): number {
-    let top = startY;
-    while (top - 1 >= 0 && chunk.blocks[top - 1]?.[lx]?.mat === mat) top--;
-    return top;
-  }
-
-  private clusterShouldFallClient(chunk: Chunk, lx: number, topY: number, bottomY: number, mat: SolidMaterial): boolean {
-    const stick = MATERIAL_STICKINESS[mat] ?? 0;
-    if (stick <= 0) return true;
-
-    const clusterHeight = bottomY - topY + 1;
-    const clusterWeight = clusterHeight * (MATERIAL_WEIGHT[mat] ?? 1);
-
-    let weightAbove = 0;
-    for (let y = topY - 1; y >= 0; y--) {
-      const above = chunk.blocks[y]?.[lx];
-      if (!above || above.mat === 'air') continue;
-      weightAbove += MATERIAL_WEIGHT[above.mat as SolidMaterial] ?? 1;
-    }
-
-    return clusterWeight + weightAbove > stick;
+    // block gravity disabled: nothing to settle
   }
 
   /**
@@ -255,8 +170,8 @@ export class ChunkManager {
 
     if (c.blocks[tileY][lx].mat !== 'air') return false;
 
-    // write data
     c.blocks[tileY][lx] = { mat };
+    this.recordOverride(tileX, tileY, mat);
     // create sprite
     const worldX = (c.cx * CHUNK_W + lx) * TILE + TILE / 2;
     const worldY = tileY * TILE + TILE / 2;
@@ -271,6 +186,7 @@ export class ChunkManager {
     for (const change of changes) {
       const { tileX, tileY, mat } = change;
       if (tileY < 0 || tileY >= CHUNK_H) continue;
+      this.recordOverride(tileX, tileY, mat);
       const cx = Math.floor(tileX / CHUNK_W);
       const lx = ((tileX % CHUNK_W) + CHUNK_W) % CHUNK_W;
       const chunk = this.ensureChunk(cx);
@@ -296,6 +212,38 @@ export class ChunkManager {
         sprite.setPosition(worldX, worldY);
       }
       (sprite as any).refreshBody?.();
+    }
+  }
+
+  private tileKey(tileX: number, tileY: number): string {
+    return `${tileX},${tileY}`;
+  }
+
+  private recordOverride(tileX: number, tileY: number, mat: Material): void {
+    const key = this.tileKey(tileX, tileY);
+    const base = this.terrain.materialAt(tileX, tileY);
+    if (mat === 'air') {
+      if (base === 'air') this.overrides.delete(key);
+      else this.overrides.set(key, 'air');
+      return;
+    }
+    if (mat === base) {
+      this.overrides.delete(key);
+      return;
+    }
+    this.overrides.set(key, mat);
+  }
+
+  private applyStoredOverrides(chunk: Chunk): void {
+    const baseTileX = chunk.cx * CHUNK_W;
+    for (let y = 0; y < CHUNK_H; y++) {
+      for (let x = 0; x < CHUNK_W; x++) {
+        const tileX = baseTileX + x;
+        const key = this.tileKey(tileX, y);
+        if (!this.overrides.has(key)) continue;
+        const mat = this.overrides.get(key)!;
+        chunk.blocks[y][x] = { mat };
+      }
     }
   }
 }

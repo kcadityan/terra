@@ -13,10 +13,21 @@ import { ChunkManager } from '../world/ChunkManager';
 import { Player } from '../player/Player';
 import { Inventory } from '../player/Inventory';
 import { ToolSystem } from '../input/ToolSystem';
-import { strikesFor } from '../world/Materials';
+import { strikesFor, SOLID_MATERIALS } from '../world/Materials';
 import { ToolbarUI, type ToolbarItemDescriptor } from '../ui/ToolbarUI';
 import { NetworkClient } from '../network/NetworkClient';
-import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
+import type {
+  BlockChange,
+  PlayerInit,
+  PlayerState,
+  PlayerShotMessage,
+  InventoryCounts,
+  SolidMaterial,
+  NPCState,
+  NPCShotMessage,
+  TimeOfDayInfo,
+  PlayerRespawnMessage,
+} from '../shared/protocol';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -69,6 +80,10 @@ export default class GameScene extends Phaser.Scene {
   private bulletSpeed = RIFLE_BULLET_SPEED;
   private rifleMaxDistance = TILE * RIFLE_RANGE_BLOCKS;
   private lastShotTime = -Infinity;
+  private dayOverlay!: Phaser.GameObjects.Rectangle;
+  private isNight = false;
+  private timeOfDayProgress = 0.25;
+  private currency = 0;
 
   // Energy drain timers
   private accumMsMove = 0;
@@ -79,7 +94,9 @@ export default class GameScene extends Phaser.Scene {
   private net = new NetworkClient();
   private selfId: string | null = null;
   private remotePlayers = new Map<string, Player>();
+  private npcSprites = new Map<string, Phaser.GameObjects.Sprite>();
   private stateSendAccum = 0;
+  private pendingRespawn: PlayerRespawnMessage | null = null;
 
   constructor() { super('Game'); }
 
@@ -135,22 +152,32 @@ export default class GameScene extends Phaser.Scene {
       g.destroy();
     }
 
-    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: true });
+    if (!this.textures.exists('npc')) {
+      const g = this.add.graphics();
+      g.fillStyle(0xc62828, 1);
+      g.fillRect(0, 0, TILE * 0.7, TILE);
+      g.generateTexture('npc', TILE, TILE);
+      g.destroy();
+    }
 
-    this.cameras.main.setBackgroundColor(0x0e0e12);
+    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: false });
+
+    this.cameras.main.setBackgroundColor(0xcfe8ff);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
-    this.hudText = this.add.text(8, 40, '', { fontSize: '14px', color: '#ffffff' }).setScrollFactor(0);
+    this.hudText = this.add.text(8, 40, '', { fontSize: '14px', color: '#ffffff' }).setScrollFactor(0).setDepth(100);
 
-    this.hpBg = this.add.graphics().setScrollFactor(0);
-    this.hpFg = this.add.graphics().setScrollFactor(0);
-    this.enBg = this.add.graphics().setScrollFactor(0);
-    this.enFg = this.add.graphics().setScrollFactor(0);
+    this.hpBg = this.add.graphics().setScrollFactor(0).setDepth(90);
+    this.hpFg = this.add.graphics().setScrollFactor(0).setDepth(91);
+    this.enBg = this.add.graphics().setScrollFactor(0).setDepth(90);
+    this.enFg = this.add.graphics().setScrollFactor(0).setDepth(91);
     this.drawBars();
 
     const w = this.scale.width;
     const h = this.scale.height;
     this.redOverlay = this.add.rectangle(0, 0, w, h, 0xdc3545, 0).setOrigin(0).setScrollFactor(0).setDepth(1000);
     this.blackOverlay = this.add.rectangle(0, 0, w, h, 0x000000, 0).setOrigin(0).setScrollFactor(0).setDepth(999);
+    this.dayOverlay = this.add.rectangle(0, 0, w, h, 0x000020, 0).setOrigin(0).setScrollFactor(0).setDepth(20);
+    this.updateLighting();
 
     this.toolbar = new ToolbarUI(this, this.toolbarItems, (index) => this.applySlotSelection(index));
     this.toolbar.refreshCounts(this.inv.counts);
@@ -183,6 +210,8 @@ export default class GameScene extends Phaser.Scene {
           this.spawnRemote(info);
         }
       });
+
+      if (msg.timeOfDay) this.applyTimeOfDay(msg.timeOfDay);
     });
 
     this.net.on('playerJoined', (info) => {
@@ -210,6 +239,10 @@ export default class GameScene extends Phaser.Scene {
       this.ensureValidSelection();
     });
 
+    this.net.on('currencyUpdate', (amount) => {
+      this.currency = amount;
+    });
+
     this.net.on('actionDenied', (reason) => {
       console.warn('[game] action denied', reason);
       this.tools.clearTarget();
@@ -218,6 +251,13 @@ export default class GameScene extends Phaser.Scene {
     this.net.on('playerShot', (msg) => {
       this.onPlayerShot(msg);
     });
+
+    this.net.on('npcSpawn', (npc) => this.spawnNpc(npc));
+    this.net.on('npcState', (npc) => this.updateNpc(npc));
+    this.net.on('npcRemove', (id) => this.removeNpc(id));
+    this.net.on('npcShot', (msg) => this.onNpcShot(msg));
+    this.net.on('playerRespawn', (msg) => this.onPlayerRespawn(msg));
+    this.net.on('timeOfDay', (info) => this.applyTimeOfDay(info));
 
     this.net.connect();
   }
@@ -229,6 +269,7 @@ export default class GameScene extends Phaser.Scene {
     this.player.energy = info.state.energy;
     this.player.facing = info.state.facing;
     this.player.setFlipX(this.player.facing < 0);
+    this.currency = info.state.currency ?? 0;
     this.tools.current = info.state.currentTool;
     if (info.state.currentTool === 'shovel' || info.state.currentTool === 'pickaxe') {
       this.lastMiningTool = info.state.currentTool;
@@ -314,7 +355,8 @@ export default class GameScene extends Phaser.Scene {
   private updateRemoteState(id: string, state: PlayerState) {
     const remote = this.remotePlayers.get(id);
     if (!remote) {
-      this.spawnRemote({ id, state, inventory: { grass: 0, dirt: 0, rock: 0, gold: 0 } });
+      const inventory = Object.fromEntries(SOLID_MATERIALS.map((mat) => [mat, 0])) as InventoryCounts;
+      this.spawnRemote({ id, state, inventory });
       return;
     }
     remote.setPosition(state.x, state.y);
@@ -449,6 +491,13 @@ export default class GameScene extends Phaser.Scene {
     bullet.setData('ownerId', ownerId ?? '');
     bullet.setData('velX', vx);
     bullet.setData('velY', vy);
+    if (ownerId && ownerId.startsWith('npc:')) {
+      bullet.setTint(0xff6666);
+    } else if (ownerId && ownerId !== this.selfId) {
+      bullet.setTint(0x66b3ff);
+    } else {
+      bullet.clearTint();
+    }
     this.bullets.add(bullet);
   }
 
@@ -492,9 +541,9 @@ export default class GameScene extends Phaser.Scene {
 
     const ownerIsSelf = msg.shooterId === this.selfId;
     if (!ownerIsSelf) {
-      const distance = this.estimateHitDistance(msg);
-      this.spawnBullet(msg.shooterId, msg.originX, msg.originY, msg.dirX, msg.dirY, distance ?? this.rifleMaxDistance);
-    } else if (msg.hitId) {
+      const distance = msg.distance ?? this.estimateHitDistance(msg) ?? this.rifleMaxDistance;
+      this.spawnBullet(msg.shooterId, msg.originX, msg.originY, msg.dirX, msg.dirY, distance);
+    } else if (msg.hitId || msg.hitNpcId || msg.distance < this.rifleMaxDistance - 1) {
       this.trimOwnBullet(msg);
     }
 
@@ -503,16 +552,29 @@ export default class GameScene extends Phaser.Scene {
       this.drawBars();
       this.showRedDeathFade();
     }
+
+    if (msg.hitNpcId) {
+      const npc = this.npcSprites.get(msg.hitNpcId);
+      if (npc) this.flashNpc(npc);
+    }
   }
 
   private estimateHitDistance(msg: PlayerShotMessage): number | null {
-    if (!msg.hitId) return null;
-    if (msg.hitId === this.selfId) {
-      return Phaser.Math.Distance.Between(msg.originX, msg.originY, this.player.x, this.player.y);
+    if (typeof msg.distance === 'number') return msg.distance;
+    if (msg.hitId) {
+      if (msg.hitId === this.selfId) {
+        return Phaser.Math.Distance.Between(msg.originX, msg.originY, this.player.x, this.player.y);
+      }
+      const remote = this.remotePlayers.get(msg.hitId);
+      if (remote) {
+        return Phaser.Math.Distance.Between(msg.originX, msg.originY, remote.x, remote.y);
+      }
     }
-    const remote = this.remotePlayers.get(msg.hitId);
-    if (remote) {
-      return Phaser.Math.Distance.Between(msg.originX, msg.originY, remote.x, remote.y);
+    if (msg.hitNpcId) {
+      const npc = this.npcSprites.get(msg.hitNpcId);
+      if (npc) {
+        return Phaser.Math.Distance.Between(msg.originX, msg.originY, npc.x, npc.y);
+      }
     }
     return null;
   }
@@ -540,18 +602,12 @@ export default class GameScene extends Phaser.Scene {
     const { width, height } = size;
     if (this.redOverlay) this.redOverlay.setDisplaySize(width, height);
     if (this.blackOverlay) this.blackOverlay.setDisplaySize(width, height);
+    if (this.dayOverlay) this.dayOverlay.setDisplaySize(width, height);
+    this.updateLighting();
   }
 
   private respawnPlayer() {
-    const tileX = Math.floor(this.player.x / TILE);
-    const { groundY } = this.cm.terrain.profileAt(tileX);
-    const spawnY = (groundY - 2) * TILE;
-
-    this.player.setPosition(this.player.x, spawnY);
-    this.player.setVelocity(0, 0);
-    this.player.hp = 100;
-    this.player.energy = 100;
-    this.drawBars();
+    this.executeRespawn();
 
     this.tweens.add({
       targets: this.redOverlay,
@@ -593,6 +649,10 @@ export default class GameScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     const dt = delta / 1000;
+
+    if (!this.deathInProgress && this.pendingRespawn) {
+      this.executeRespawn();
+    }
 
     const left = this.keys.a.isDown;
     const right = this.keys.d.isDown;
@@ -665,13 +725,14 @@ export default class GameScene extends Phaser.Scene {
     this.player.setFlipX(this.player.facing < 0);
 
     this.updateBullets(delta);
+    this.updateNpcSprites(delta);
 
     if (this.player.hp <= 0) this.showRedDeathFade();
     this.updateBlackout();
 
     const activeLabel = this.activeItem ? this.activeItem.label : '—';
     this.hudText.setText(
-      `HP: ${this.player.hp}  Energy: ${this.player.energy}  Active: ${activeLabel}` +
+      `HP: ${this.player.hp}  Energy: ${this.player.energy}  Currency: ${this.currency}  Active: ${activeLabel}` +
       `  Block: ${this.selectedMat ?? '—'}\n` +
       `Weight: ${weight}  Speed: ${(speedFactor * 100) | 0}%`
     );
@@ -699,7 +760,161 @@ export default class GameScene extends Phaser.Scene {
       facing: this.player.facing,
       currentTool: this.tools.current,
       selectedMat: this.selectedMat,
+      currency: this.currency,
     };
     this.net.sendState(payload);
   }
+
+  private spawnNpc(state: NPCState) {
+    let sprite = this.npcSprites.get(state.id);
+    if (!sprite) {
+      sprite = this.add.sprite(state.x, state.y, 'npc');
+      sprite.setOrigin(0.5, 1);
+      sprite.setDepth(50);
+      this.npcSprites.set(state.id, sprite);
+    }
+    sprite.setPosition(state.x, state.y);
+    sprite.setScale(1);
+    sprite.setData('hp', state.hp);
+  }
+
+  private updateNpc(state: NPCState) {
+    const sprite = this.npcSprites.get(state.id);
+    if (!sprite) {
+      this.spawnNpc(state);
+      return;
+    }
+    const prevHP = sprite.getData('hp') as number | undefined;
+    sprite.setData('hp', state.hp);
+    sprite.setPosition(state.x, state.y);
+    if (prevHP !== undefined && state.hp < prevHP) {
+      this.flashNpc(sprite);
+    }
+  }
+
+  private removeNpc(id: string) {
+    const sprite = this.npcSprites.get(id);
+    if (!sprite) return;
+    this.npcSprites.delete(id);
+    sprite.destroy();
+  }
+
+  private onNpcShot(msg: NPCShotMessage) {
+    const distance = msg.distance ?? this.estimateNpcShotDistance(msg) ?? this.rifleMaxDistance;
+    this.spawnBullet(`npc:${msg.npcId}`, msg.originX, msg.originY, msg.dirX, msg.dirY, distance);
+    if (msg.hitPlayerId === this.selfId) {
+      this.player.hp = 0;
+      this.drawBars();
+      this.showRedDeathFade();
+    }
+  }
+
+  private onPlayerRespawn(msg: PlayerRespawnMessage) {
+    if (!this.deathInProgress) {
+      this.player.hp = 0;
+      this.drawBars();
+      this.showRedDeathFade();
+    }
+    this.pendingRespawn = msg;
+    if (!this.deathInProgress) {
+      this.executeRespawn();
+    }
+  }
+
+  private applyTimeOfDay(info: TimeOfDayInfo) {
+    this.isNight = info.isNight;
+    this.timeOfDayProgress = info.progress;
+    this.updateLighting();
+  }
+
+  private updateNpcSprites(_delta: number) {
+    // reserve for future animation, currently positions handled on updates
+  }
+
+  private flashNpc(sprite: Phaser.GameObjects.Sprite) {
+    sprite.setTintFill(0xffffff);
+    this.tweens.add({
+      targets: sprite,
+      alpha: { from: 1, to: 0.2 },
+      yoyo: true,
+      duration: 80,
+      repeat: 0,
+      onComplete: () => sprite.clearTint(),
+    });
+  }
+
+  private updateLighting() {
+    const overlay = this.dayOverlay;
+    if (!overlay) return;
+    const progress = Phaser.Math.Wrap(this.timeOfDayProgress, 0, 1);
+    const dayPhase = progress < 0.5 ? progress / 0.5 : 0;
+    const nightPhase = progress >= 0.5 ? (progress - 0.5) / 0.5 : 0;
+
+    const dayBrightness = dayPhase > 0 ? Math.sin(dayPhase * Math.PI) : 0;
+    const nightIntensity = nightPhase > 0 ? Math.sin(nightPhase * Math.PI) : 0;
+
+    const dayColor = Phaser.Display.Color.ValueToColor(0xcfe8ff);
+    const nightColor = Phaser.Display.Color.ValueToColor(0x050810);
+    const blend = Phaser.Display.Color.Interpolate.ColorWithColor(
+      nightColor,
+      dayColor,
+      100,
+      Math.round(Math.min(1, dayBrightness) * 100)
+    );
+    const skyColor = Phaser.Display.Color.GetColor(Math.round(blend.r), Math.round(blend.g), Math.round(blend.b));
+    this.cameras.main.setBackgroundColor(skyColor);
+
+    const overlayAlpha = 0.55 * Math.min(1, nightIntensity);
+    overlay.setFillStyle(0x000015, overlayAlpha);
+  }
+
+  private executeRespawn() {
+    const data = this.pendingRespawn;
+    if (!data) {
+      return;
+    }
+    this.pendingRespawn = null;
+
+    const state = data.state;
+    this.player.setPosition(state.x, state.y);
+    this.player.setVelocity(0, 0);
+    this.player.hp = state.hp;
+    this.player.energy = state.energy;
+    this.player.facing = state.facing;
+    this.player.setFlipX(this.player.facing < 0);
+    this.currency = state.currency ?? this.currency;
+
+    this.tools.current = state.currentTool;
+    if (this.tools.current === 'shovel' || this.tools.current === 'pickaxe') this.lastMiningTool = this.tools.current;
+    this.inv.setAll(data.inventory);
+    this.toolbar.refreshCounts(this.inv.counts);
+
+    this.selectedMat = state.selectedMat;
+
+    const targetSlot = state.selectedMat
+      ? this.toolbarItems.findIndex((item) => item.kind === 'block' && item.mat === state.selectedMat)
+      : this.toolbarItems.findIndex((item) => item.kind === 'tool' && item.tool === state.currentTool);
+    this.applySlotSelection(targetSlot >= 0 ? targetSlot : 0);
+    this.ensureValidSelection();
+
+    this.drawBars();
+
+    const cx = this.cm.worldToChunkX(this.player.x);
+    for (let i = cx - LOAD_RADIUS; i <= cx + LOAD_RADIUS; i++) this.cm.ensureChunk(i);
+  }
+
+  private estimateNpcShotDistance(msg: NPCShotMessage): number | null {
+    if (typeof msg.distance === 'number') return msg.distance;
+    if (msg.hitPlayerId) {
+      if (msg.hitPlayerId === this.selfId) {
+        return Phaser.Math.Distance.Between(msg.originX, msg.originY, this.player.x, this.player.y);
+      }
+      const remote = this.remotePlayers.get(msg.hitPlayerId);
+      if (remote) {
+        return Phaser.Math.Distance.Between(msg.originX, msg.originY, remote.x, remote.y);
+      }
+    }
+    return null;
+  }
+
 }

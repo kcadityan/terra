@@ -7,6 +7,7 @@ export class InventorySchema extends Schema {
   @type('number') dirt = 0;
   @type('number') rock = 0;
   @type('number') wood = 0;
+  @type('number') leaf = 0;
   @type('number') coal = 0;
   @type('number') copper = 0;
   @type('number') silver = 0;
@@ -18,6 +19,7 @@ export class InventorySchema extends Schema {
     this.dirt = inventory.dirt ?? 0;
     this.rock = inventory.rock ?? 0;
     this.wood = inventory.wood ?? 0;
+    this.leaf = inventory.leaf ?? 0;
     this.coal = inventory.coal ?? 0;
     this.copper = inventory.copper ?? 0;
     this.silver = inventory.silver ?? 0;
@@ -40,6 +42,7 @@ export class InventorySchema extends Schema {
       dirt: this.dirt,
       rock: this.rock,
       wood: this.wood,
+      leaf: this.leaf,
       coal: this.coal,
       copper: this.copper,
       silver: this.silver,
@@ -59,6 +62,7 @@ export class PlayerStateSchema extends Schema implements PlayerState {
   @type('int8') facing: 1 | -1 = 1;
   @type('string') currentTool: PlayerState['currentTool'] = 'shovel';
   @type('string') selectedMat: SolidMaterial | null = null;
+  @type('number') currency = 0;
 
   setFrom(state: PlayerState) {
     this.x = state.x;
@@ -70,6 +74,7 @@ export class PlayerStateSchema extends Schema implements PlayerState {
     this.facing = state.facing;
     this.currentTool = state.currentTool;
     this.selectedMat = state.selectedMat;
+    this.currency = state.currency;
   }
 
   merge(state: Partial<PlayerState>) {
@@ -82,6 +87,7 @@ export class PlayerStateSchema extends Schema implements PlayerState {
     if (state.facing !== undefined) this.facing = state.facing;
     if (state.currentTool !== undefined) this.currentTool = state.currentTool;
     if (state.selectedMat !== undefined) this.selectedMat = state.selectedMat;
+    // currency is authoritative on the server; ignore client-provided values
   }
 
 }

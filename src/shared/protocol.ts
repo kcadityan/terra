@@ -12,6 +12,7 @@ export interface PlayerState {
   facing: 1 | -1;
   currentTool: Tool;
   selectedMat: SolidMaterial | null;
+  currency: number;
 }
 
 export type InventoryCounts = Record<SolidMaterial, number>;
@@ -28,12 +29,27 @@ export interface PlayerInit {
   inventory: InventoryCounts;
 }
 
+export interface TimeOfDayInfo {
+  isNight: boolean;
+  progress: number;
+}
+
+export interface NPCState {
+  id: string;
+  x: number;
+  y: number;
+  hp: number;
+}
+
+export type NPCInit = NPCState;
+
 export interface WelcomeMessage {
   type: 'welcome';
   selfId: string;
   seed: number;
   players: PlayerInit[];
   world: BlockChange[];
+  timeOfDay: TimeOfDayInfo;
 }
 
 export interface PlayerJoinedMessage {
@@ -63,6 +79,11 @@ export interface InventoryUpdateMessage {
   inventory: InventoryCounts;
 }
 
+export interface CurrencyUpdateMessage {
+  type: 'currency-update';
+  amount: number;
+}
+
 export interface PlayerShotMessage {
   type: 'player-shot';
   shooterId: string;
@@ -71,6 +92,45 @@ export interface PlayerShotMessage {
   dirX: number;
   dirY: number;
   hitId: string | null;
+  hitNpcId?: string | null;
+  distance: number;
+}
+
+export interface NPCShotMessage {
+  type: 'npc-shot';
+  npcId: string;
+  originX: number;
+  originY: number;
+  dirX: number;
+  dirY: number;
+  hitPlayerId: string | null;
+  distance: number;
+}
+
+export interface NPCSpawnMessage {
+  type: 'npc-spawn';
+  npc: NPCState;
+}
+
+export interface NPCStateMessage {
+  type: 'npc-state';
+  npc: NPCState;
+}
+
+export interface NPCRemoveMessage {
+  type: 'npc-remove';
+  id: string;
+}
+
+export interface PlayerRespawnMessage {
+  type: 'player-respawn';
+  state: PlayerState;
+  inventory: InventoryCounts;
+}
+
+export interface TimeOfDayMessage {
+  type: 'time-of-day';
+  info: TimeOfDayInfo;
 }
 
 export interface ActionDeniedMessage {
@@ -85,7 +145,14 @@ export type ServerMessage =
   | PlayerStateMessage
   | WorldUpdateMessage
   | InventoryUpdateMessage
+  | CurrencyUpdateMessage
   | PlayerShotMessage
+  | NPCShotMessage
+  | NPCSpawnMessage
+  | NPCStateMessage
+  | NPCRemoveMessage
+  | PlayerRespawnMessage
+  | TimeOfDayMessage
   | ActionDeniedMessage;
 
 export interface HelloMessage {

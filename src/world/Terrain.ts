@@ -18,9 +18,38 @@ export class Terrain {
   materialAt(worldTileX: number, worldTileY: number): Material {
     const { groundY } = this.profileAt(worldTileX);
     const treeHeight = this.treeHeightAt(worldTileX, groundY);
+    if (treeHeight > 0 && worldTileY < groundY) {
+      const topY = groundY - treeHeight;
+      if (worldTileY === topY) {
+        return 'leaf';
+      }
+      if (worldTileY === topY - 1 && worldTileY >= 0) {
+        return 'leaf';
+      }
+      if (worldTileY > topY && worldTileY < groundY) {
+        return 'wood';
+      }
+    }
 
-    if (treeHeight > 0 && worldTileY < groundY && worldTileY >= groundY - treeHeight) {
-      return 'wood';
+    if (worldTileY < groundY) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const neighborX = worldTileX + dx;
+        const neighborProfile = this.profileAt(neighborX);
+        const neighborHeight = this.treeHeightAt(neighborX, neighborProfile.groundY);
+        if (neighborHeight <= 0) continue;
+
+        const canopyTop = neighborProfile.groundY - neighborHeight;
+        if (worldTileY < canopyTop || worldTileY >= neighborProfile.groundY) continue;
+
+        const verticalOffset = worldTileY - canopyTop;
+        if (verticalOffset > 1 || verticalOffset < 0) continue;
+        if (dx === 0 && verticalOffset > 0) continue;
+
+        const radius = verticalOffset === 0 ? 2 : 1;
+        if (Math.abs(dx) <= radius) {
+          return 'leaf';
+        }
+      }
     }
 
     if (worldTileY < groundY) return 'air';
