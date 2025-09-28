@@ -18,6 +18,7 @@ import { NetworkClient } from '../network/NetworkClient';
 import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
 import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
 import { advanceEnergy } from './state/playerEnergy';
+import { deriveHudState } from './state/hud';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -146,7 +147,7 @@ export default class GameScene extends Phaser.Scene {
     this.hpFg = this.add.graphics().setScrollFactor(0);
     this.enBg = this.add.graphics().setScrollFactor(0);
     this.enFg = this.add.graphics().setScrollFactor(0);
-    this.drawBars();
+    this.drawBarsFromFractions(1, 1);
 
     const w = this.scale.width;
     const h = this.scale.height;
@@ -239,7 +240,7 @@ export default class GameScene extends Phaser.Scene {
     this.toolbar.refreshCounts(this.inv.counts);
     const slot = this.resolveSlotForState(info.state);
     this.applySlotSelection(slot);
-    this.drawBars();
+    this.drawBarsFromFractions(this.player.hp / 100, this.player.energy / 100);
   }
 
   private resolveSlotForState(state: PlayerState): number {
@@ -327,18 +328,18 @@ export default class GameScene extends Phaser.Scene {
     this.cm.applyBlockChanges(changes);
   }
 
-  private drawBars() {
+  private drawBarsFromFractions(hpFrac: number, energyFrac: number) {
     const x = 8, yHp = 8, yEn = 22;
     const w = 200, h = 10;
 
     this.hpBg.clear().fillStyle(0x222222, 1).fillRect(x - 1, yHp - 1, w + 2, h + 2);
     this.enBg.clear().fillStyle(0x222222, 1).fillRect(x - 1, yEn - 1, w + 2, h + 2);
 
-    const hpFrac = this.player ? Math.max(0, Math.min(1, this.player.hp / 100)) : 1;
-    const enFrac = this.player ? Math.max(0, Math.min(1, this.player.energy / 100)) : 1;
+    const clampedHp = Math.max(0, Math.min(1, hpFrac));
+    const clampedEn = Math.max(0, Math.min(1, energyFrac));
 
-    this.hpFg.clear().fillStyle(0xdc3545, 1).fillRect(x, yHp, w * hpFrac, h);
-    this.enFg.clear().fillStyle(0x1e90ff, 1).fillRect(x, yEn, w * enFrac, h);
+    this.hpFg.clear().fillStyle(0xdc3545, 1).fillRect(x, yHp, w * clampedHp, h);
+    this.enFg.clear().fillStyle(0x1e90ff, 1).fillRect(x, yEn, w * clampedEn, h);
   }
 
   private onPointerDown(pointer: Phaser.Input.Pointer) {
@@ -392,7 +393,7 @@ export default class GameScene extends Phaser.Scene {
         this.miningNow = true;
         const s = info.chunk.sprites[info.by][info.bx];
         if (s) this.tweens.add({ targets: s, alpha: 0.5, yoyo: true, duration: 60, repeat: 0 });
-        this.drawBars();
+        this.drawBarsFromFractions(this.player.hp / 100, this.player.energy / 100);
       }
 
       if (mineResult.request) {
@@ -447,7 +448,7 @@ export default class GameScene extends Phaser.Scene {
     this.spawnBullet(this.selfId, originX, originY, dirX, dirY, this.rifleMaxDistance);
     this.net.sendShoot(originX, originY, dirX, dirY);
 
-    this.drawBars();
+    this.drawBarsFromFractions(this.player.hp / 100, this.player.energy / 100);
     this.tools.clearTarget();
   }
 
@@ -522,7 +523,7 @@ export default class GameScene extends Phaser.Scene {
 
     if (msg.hitId === this.selfId) {
       this.player.hp = 0;
-      this.drawBars();
+      this.drawBarsFromFractions(this.player.hp / 100, this.player.energy / 100);
       this.showRedDeathFade();
     }
   }
@@ -570,10 +571,10 @@ export default class GameScene extends Phaser.Scene {
     const spawnY = (groundY - 2) * TILE;
 
     this.player.setPosition(this.player.x, spawnY);
-    this.player.setVelocity(0, 0);
-    this.player.hp = 100;
-    this.player.energy = 100;
-    this.drawBars();
+   this.player.setVelocity(0, 0);
+   this.player.hp = 100;
+   this.player.energy = 100;
+    this.drawBarsFromFractions(1, 1);
 
     this.tweens.add({
       targets: this.redOverlay,
@@ -693,12 +694,16 @@ export default class GameScene extends Phaser.Scene {
     this.updateBlackout();
 
     const activeLabel = this.activeItem ? this.activeItem.label : '—';
-    this.hudText.setText(
-      `HP: ${this.player.hp}  Energy: ${this.player.energy}  Active: ${activeLabel}` +
-      `  Block: ${this.selectedMat ?? '—'}\n` +
-      `Weight: ${weight}  Speed: ${(speedFactor * 100) | 0}%`
-    );
-    this.drawBars();
+    const hudState = deriveHudState({
+      hp: this.player.hp,
+      energy: this.player.energy,
+      activeLabel,
+      selectedMaterial: this.selectedMat ?? '—',
+      weight,
+      speedFactor,
+    });
+    this.hudText.setText(hudState.text);
+    this.drawBarsFromFractions(hudState.hpFraction, hudState.energyFraction);
 
     this.miningNow = false;
 
