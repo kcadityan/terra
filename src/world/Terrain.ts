@@ -1,5 +1,24 @@
 import type { Material } from '../shared/game-types';
+import type { SolidMaterial } from '../shared/protocol';
 import { valueNoise1D, hash01 } from '../utils/Rand';
+
+interface OreRule {
+  mat: SolidMaterial;
+  minDepth: number;
+  maxDepth: number;
+  cellSpan: number;
+  clusterChance: number;
+  maxRadius: number;
+  offset: number;
+}
+
+const ORE_RULES: OreRule[] = [
+  { mat: 'diamond', minDepth: 22, maxDepth: 58, cellSpan: 48, clusterChance: 0.12, maxRadius: 2, offset: 397 },
+  { mat: 'gold', minDepth: 16, maxDepth: 52, cellSpan: 36, clusterChance: 0.18, maxRadius: 3, offset: 211 },
+  { mat: 'silver', minDepth: 12, maxDepth: 48, cellSpan: 28, clusterChance: 0.25, maxRadius: 3, offset: 577 },
+  { mat: 'copper', minDepth: 6, maxDepth: 42, cellSpan: 20, clusterChance: 0.35, maxRadius: 4, offset: 863 },
+  { mat: 'coal', minDepth: 3, maxDepth: 46, cellSpan: 16, clusterChance: 0.45, maxRadius: 4, offset: 109 }
+];
 
 export interface TerrainProfile {
   groundY: number; // surface tile Y
@@ -58,22 +77,8 @@ export class Terrain {
     const depth = worldTileY - groundY;
     if (depth <= 3) return 'dirt';
 
-    const sample = hash01(worldTileX * 131 + worldTileY * 719, this.seed);
-
-    if (depth <= 6) {
-      if (sample > 0.92) return 'copper';
-      if (sample > 0.82) return 'coal';
-    } else if (depth <= 14) {
-      if (sample > 0.97) return 'silver';
-      if (sample > 0.92) return 'gold';
-      if (sample > 0.85) return 'coal';
-      if (sample > 0.8) return 'copper';
-    } else {
-      if (sample > 0.985) return 'diamond';
-      if (sample > 0.95) return 'silver';
-      if (sample > 0.9) return 'gold';
-      if (sample > 0.85) return 'copper';
-    }
+    const ore = this.sampleOre(worldTileX, worldTileY, depth);
+    if (ore) return ore;
 
     return 'rock';
   }
@@ -88,5 +93,34 @@ export class Terrain {
 
     const variant = hash01(worldTileX * 577 + this.seed * 311, this.seed + 409);
     return 3 + Math.floor(variant * 3);
+  }
+
+  private sampleOre(worldTileX: number, worldTileY: number, depth: number): SolidMaterial | null {
+    for (const rule of ORE_RULES) {
+      if (depth < rule.minDepth || depth > rule.maxDepth) continue;
+
+      const cellX = Math.floor(worldTileX / rule.cellSpan);
+      const cellY = Math.floor(worldTileY / rule.cellSpan);
+      const clusterSeed = this.seed * 131071 + rule.offset * 17 + cellX * 9289 + cellY * 6263;
+      const clusterChance = hash01(clusterSeed, this.seed + rule.offset);
+      if (clusterChance > rule.clusterChance) continue;
+
+      const centerX = cellX * rule.cellSpan
+        + Math.floor(hash01(clusterSeed + 11, this.seed + rule.offset) * rule.cellSpan);
+      const depthRange = Math.max(1, rule.maxDepth - rule.minDepth);
+      const centerDepth = rule.minDepth
+        + Math.floor(hash01(clusterSeed + 23, this.seed + rule.offset) * depthRange);
+      const radius = 1 + Math.floor(hash01(clusterSeed + 41, this.seed + rule.offset) * rule.maxRadius);
+
+      const horizontalDistance = Math.abs(worldTileX - centerX);
+      const depthDistance = Math.abs(depth - centerDepth);
+      if (horizontalDistance > radius || depthDistance > radius) continue;
+
+      const noise = hash01(worldTileX * 7919 + worldTileY * 1543 + rule.offset, this.seed);
+      if (noise < 0.25) continue;
+
+      return rule.mat;
+    }
+    return null;
   }
 }

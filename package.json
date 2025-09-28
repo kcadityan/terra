@@ -17,7 +17,8 @@
     "colyseus": "^0.15.57",
     "@colyseus/schema": "^2.0.16",
     "@colyseus/ws-transport": "^0.15.3",
-    "colyseus.js": "^0.15.26"
+    "colyseus.js": "^0.15.26",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

@@ -31,6 +31,7 @@ import {
 import { WorldStore } from '../world-store';
 import { TerraState, PlayerSchema, BlockSchema, serializePlayers } from '../state/TerraState';
 import type { TerrainProfile } from '../../src/world/Terrain';
+import { createWalletProvider, type WalletProvider } from '../services/WalletProvider';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -125,9 +126,12 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   private cycleStart = Date.now();
   private isNight = false;
   private deposits = new Map<string, DepositRecord>();
+  private wallet!: WalletProvider;
 
   onCreate() {
     const seed = DEFAULT_SEED;
+    this.wallet = createWalletProvider();
+    void this.wallet.init();
     this.world = new WorldStore(seed);
     this.setState(new TerraState(seed));
     this.cycleStart = Date.now();
@@ -157,13 +161,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.clock.setInterval(() => this.tickNPCs(0.1), 100);
     this.clock.setInterval(() => {
       this.tickTimeOfDay();
-      this.tickDeposits();
+      void this.tickDeposits();
     }, 1000);
   }
 
-  onJoin(client: Client<PlayerInit>) {
+  async onJoin(client: Client<PlayerInit>) {
     const playerId = nanoid(PLAYER_ID_LENGTH);
     const spawn = this.spawnState(this.state.players.size);
+    const startingCurrency = await this.wallet.ensurePlayer(playerId);
+    spawn.currency = startingCurrency;
     const player = new PlayerSchema();
     player.id = playerId;
     player.state.setFrom(spawn);
@@ -201,6 +207,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
+    void this.wallet.setBalance(player.id, player.state.currency ?? 0);
     const left: ServerMessage = { type: 'player-left', id: player.id };
     this.state.players.delete(client.sessionId);
     this.broadcastExcept(client, left);
@@ -607,6 +614,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.sendToPlayer(player.id, { type: 'player-respawn', state: payloadState, inventory });
     this.sendToPlayer(player.id, { type: 'inventory-update', id: player.id, inventory });
     this.broadcastExcept(null, { type: 'player-state', id: player.id, state: payloadState });
+    void this.wallet.setBalance(player.id, payloadState.currency ?? 0);
 
     for (const [sessionId, schema] of this.state.players.entries()) {
       if (schema === player) {
@@ -671,7 +679,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     return { isNight, progress };
   }
 
-  private tickDeposits() {
+  private async tickDeposits() {
     if (this.deposits.size === 0) return;
     const now = Date.now();
     for (const [k, deposit] of Array.from(this.deposits.entries())) {
@@ -694,7 +702,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
       this.deposits.delete(k);
       const value = BLOCK_CURRENCY_VALUE[deposit.mat] ?? 0;
-      if (value > 0) this.rewardCurrency(deposit.playerId, value);
+      if (value > 0) await this.rewardCurrency(deposit.playerId, value);
     }
   }
 
@@ -723,12 +731,20 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     }
   }
 
-  private rewardCurrency(playerId: string, amount: number) {
+  private async rewardCurrency(playerId: string, amount: number) {
     if (amount <= 0) return;
+    let balance: number | null = null;
+    try {
+      balance = await this.wallet.addCurrency(playerId, amount);
+    } catch (err) {
+      console.error('[wallet] failed to add currency via provider', err);
+    }
+
     const player = this.getPlayerById(playerId);
     if (!player) return;
-    player.state.currency = (player.state.currency ?? 0) + amount;
-    this.sendToPlayer(playerId, { type: 'currency-update', amount: player.state.currency });
+    const nextBalance = balance ?? (player.state.currency ?? 0) + amount;
+    player.state.currency = nextBalance;
+    this.sendToPlayer(playerId, { type: 'currency-update', amount: nextBalance });
     this.broadcastPlayerState(player);
   }
 
