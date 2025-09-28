@@ -24,6 +24,16 @@ export class ToolSystem {
     this.targetStrikesLeft = strikesFor(this.current, mat);
   }
 
+  applyTarget(target: { tileX: number; tileY: number; material: Material; strikesLeft: number } | null) {
+    if (!target) {
+      this.clearTarget();
+      return;
+    }
+    this.targetTile = { x: target.tileX, y: target.tileY };
+    this.targetMat = target.material;
+    this.targetStrikesLeft = target.strikesLeft;
+  }
+
   clearTarget() {
     this.targetTile = null;
     this.targetMat = null;

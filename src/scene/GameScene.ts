@@ -13,10 +13,10 @@ import { ChunkManager } from '../world/ChunkManager';
 import { Player } from '../player/Player';
 import { Inventory } from '../player/Inventory';
 import { ToolSystem } from '../input/ToolSystem';
-import { strikesFor } from '../world/Materials';
 import { ToolbarUI, type ToolbarItemDescriptor } from '../ui/ToolbarUI';
 import { NetworkClient } from '../network/NetworkClient';
 import type { BlockChange, PlayerInit, PlayerState, PlayerShotMessage, SolidMaterial } from '../shared/protocol';
+import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -367,31 +367,48 @@ export default class GameScene extends Phaser.Scene {
       const mat = info.data.mat;
       if (mat === 'air') return;
 
-      if (!this.tools.targetTile || this.tools.targetTile.x !== tileX || this.tools.targetTile.y !== tileY) {
-        this.tools.beginTarget(tileX, tileY, mat);
-        this.tools.targetStrikesLeft = strikesFor(this.tools.current, mat);
+      const mineState: MineState = {
+        tool: this.tools.current,
+        lastMiningTool: this.lastMiningTool,
+        target:
+          this.tools.targetTile && this.tools.targetMat
+            ? {
+                tileX: this.tools.targetTile.x,
+                tileY: this.tools.targetTile.y,
+                material: this.tools.targetMat,
+                strikesLeft: this.tools.targetStrikesLeft,
+              }
+            : null,
+      };
+
+      const mineResult = applyMineAction(mineState, { tileX, tileY, material: mat });
+
+      this.lastMiningTool = mineResult.state.lastMiningTool;
+      this.tools.applyTarget(mineResult.state.target);
+
+      if (mineResult.strikesConsumed > 0) {
+        this.player.useEnergy(0.5 * mineResult.strikesConsumed);
+        this.miningNow = true;
+        const s = info.chunk.sprites[info.by][info.bx];
+        if (s) this.tweens.add({ targets: s, alpha: 0.5, yoyo: true, duration: 60, repeat: 0 });
+        this.drawBars();
       }
 
-      if (this.tools.current === 'rifle') return;
-
-      this.tools.targetStrikesLeft -= 1;
-      this.player.useEnergy(0.5);
-      this.miningNow = true;
-
-      const s = info.chunk.sprites[info.by][info.bx];
-      if (s) this.tweens.add({ targets: s, alpha: 0.5, yoyo: true, duration: 60, repeat: 0 });
-      this.drawBars();
-
-      if (this.tools.targetStrikesLeft <= 0) {
-        this.net.requestMine(tileX, tileY);
-        this.tools.clearTarget();
+      if (mineResult.request) {
+        this.net.requestMine(mineResult.request.tileX, mineResult.request.tileY);
       }
     }
 
     if (pointer.rightButtonDown()) {
       if (distance > reach) return;
-      if (!this.selectedMat) return;
-      if (this.inv.counts[this.selectedMat] <= 0) return;
+
+      const placementEval = evaluatePlacementAction(
+        { selectedMat: this.selectedMat, inventory: this.inv.counts },
+        tileX,
+        tileY,
+      );
+
+      if (!placementEval.ok || !placementEval.request) return;
 
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       const bodyRect = new Phaser.Geom.Rectangle(body.x, body.y, body.width, body.height);
@@ -401,7 +418,11 @@ export default class GameScene extends Phaser.Scene {
       const existing = this.cm.getBlockDataAtTile(tileX, tileY);
       if (!existing || existing.data.mat !== 'air') return;
 
-      this.net.requestPlace(tileX, tileY, this.selectedMat);
+      this.net.requestPlace(
+        placementEval.request.tileX,
+        placementEval.request.tileY,
+        placementEval.request.material,
+      );
     }
   }
 
