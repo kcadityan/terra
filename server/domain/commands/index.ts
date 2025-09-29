@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { DomainEvent } from '../events';
 import type { WorldState } from '../state';
-import type { SolidMaterial } from '../../src/shared/protocol';
-import type { Tool } from '../../src/shared/game-types';
+import type { SolidMaterial } from '../../../src/shared/protocol';
+import type { Tool } from '../../../src/shared/game-types';
 
 type ValidationOk = { ok: true; event: DomainEvent };
 type ValidationErr<T extends string> = { ok: false; error: { type: T; message: string } };
@@ -15,10 +15,7 @@ export interface MineCommand {
   material: SolidMaterial;
 }
 
-export type MineResult =
-  | ValidationOk
-  | ValidationErr<'mine/player-missing'>
-  | ValidationErr<'mine/invalid-material'>;
+export type MineResult = ValidationOk | ValidationErr<'mine/player-missing'>;
 
 export interface PlaceCommand {
   type: 'player.place.cmd';
@@ -54,10 +51,6 @@ export function validateMine(state: WorldState, command: MineCommand): MineResul
   if (!player) {
     return { ok: false, error: { type: 'mine/player-missing', message: 'player not found' } };
   }
-  if (command.material === 'air') {
-    return { ok: false, error: { type: 'mine/invalid-material', message: 'cannot mine air' } };
-  }
-
   return {
     ok: true,
     event: {

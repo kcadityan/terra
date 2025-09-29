@@ -1,4 +1,4 @@
-import type { EventBase } from '@terra/event-log/src/types';
+import type { EventBase } from '@terra/event-log';
 import type { Tool } from '../../src/shared/game-types';
 import type { SolidMaterial } from '../../src/shared/protocol';
 

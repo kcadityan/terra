@@ -36,6 +36,9 @@ import {
   evaluatePlayerJoined,
 } from '../events/terra-events';
 import { TerraEventBus } from '../events/bus';
+import { createWorldLog, type WorldLog } from '../domain/engine';
+import { randomUUID } from 'node:crypto';
+import type { DomainEvent } from '../domain/events';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -68,27 +71,30 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   private world!: WorldStore;
   private lastShotAt = new Map<string, number>();
   private bus = new TerraEventBus();
+  private worldLog!: WorldLog;
 
-  onCreate() {
+  async onCreate() {
     const seed = DEFAULT_SEED;
     this.world = new WorldStore(seed);
     this.setState(new TerraState(seed));
+    this.worldLog = createWorldLog(this.roomId);
+    await this.worldLog.replay();
     this.setupEventBus();
 
     this.onMessage<ClientStateMessage>('state', (client, message) => {
       this.handleState(client, message);
     });
 
-    this.onMessage<MineBlockMessage>('mine-block', (client, message) => {
-      this.handleMine(client, message);
+    this.onMessage<MineBlockMessage>('mine-block', async (client, message) => {
+      await this.handleMine(client, message);
     });
 
-    this.onMessage<PlaceBlockMessage>('place-block', (client, message) => {
-      this.handlePlace(client, message);
+    this.onMessage<PlaceBlockMessage>('place-block', async (client, message) => {
+      await this.handlePlace(client, message);
     });
 
-    this.onMessage<ShootMessage>('shoot', (client, message) => {
-      this.handleShoot(client, message);
+    this.onMessage<ShootMessage>('shoot', async (client, message) => {
+      await this.handleShoot(client, message);
     });
 
     this.onMessage('hello', () => {
@@ -182,7 +188,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.broadcastExcept(client, payload);
   }
 
-  private handleMine(client: Client, message: MineBlockMessage) {
+  private async handleMine(client: Client, message: MineBlockMessage) {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
@@ -207,9 +213,16 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     this.bus.emit('world-update', { descriptors: removal.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
+
+    await this.appendDomainEvent('player.mined', {
+      playerId: player.id,
+      tileX: message.tileX,
+      tileY: message.tileY,
+      material: removal.removed,
+    });
   }
 
-  private handlePlace(client: Client, message: PlaceBlockMessage) {
+  private async handlePlace(client: Client, message: PlaceBlockMessage) {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
@@ -245,9 +258,16 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     this.bus.emit('world-update', { descriptors: evaluation.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
+
+    await this.appendDomainEvent('player.placed', {
+      playerId: player.id,
+      tileX: message.tileX,
+      tileY: message.tileY,
+      material: mat,
+    });
   }
 
-  private handleShoot(client: Client, message: ShootMessage) {
+  private async handleShoot(client: Client, message: ShootMessage) {
     const shooter = this.state.players.get(client.sessionId);
     if (!shooter) return;
 
@@ -350,6 +370,12 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const removal = this.world.prepareRemoval(coord);
     if (!removal) return;
     this.bus.emit('world-update', { descriptors: removal.descriptors });
+    void this.appendDomainEvent('player.mined', {
+      playerId: 'environment',
+      tileX,
+      tileY,
+      material: removal.removed,
+    });
   }
 
   private spawnState(playerIndex: number): PlayerState {
@@ -367,6 +393,28 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       currentTool: 'shovel',
       selectedMat: null,
     };
+  }
+
+  private createDomainEvent<T extends DomainEvent['type']>(
+    type: T,
+    payload: Omit<Extract<DomainEvent, { type: T }>, 'id' | 'ts' | 'type'>,
+  ): Extract<DomainEvent, { type: T }> {
+    return Object.assign(
+      { id: randomUUID(), ts: Date.now(), type } as const,
+      payload,
+    ) as Extract<DomainEvent, { type: T }>;
+  }
+
+  private async appendDomainEvent<T extends DomainEvent['type']>(
+    type: T,
+    payload: Omit<Extract<DomainEvent, { type: T }>, 'id' | 'ts' | 'type'>,
+  ) {
+    const domainEvent = this.createDomainEvent(type, payload);
+    try {
+      await this.worldLog.append([domainEvent]);
+    } catch (err) {
+      console.error('[terra] failed to append domain event', err);
+    }
   }
 
   private applyWorldSnapshot(snapshot: BlockChange[]) {

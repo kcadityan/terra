@@ -54,7 +54,9 @@ export class LogEngine<S, E extends EventBase> {
     }
 
     if (this.snapshots && this.opts?.snapshotEvery) {
-      const countSinceSnapshot = appendResult.lastSeq - (await this.snapshots.load(stream))?.seq ?? appendResult.lastSeq;
+      const existing = await this.snapshots.load(stream);
+      const lastSnapshotSeq = existing?.seq ?? 0;
+      const countSinceSnapshot = appendResult.lastSeq - lastSnapshotSeq;
       if (countSinceSnapshot >= this.opts.snapshotEvery) {
         await this.snapshots.save(stream, nextState, appendResult.lastSeq);
       }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from '../reducer';
 import { initialWorldState } from '../state';
+import type { WorldState } from '../state';
 import type { DomainEvent } from '../events';
 
 const baseEvent = {
@@ -37,7 +38,7 @@ describe('domain reducer', () => {
 
   it('updates player tool when player exists', () => {
     const state = initialWorldState();
-    const withPlayer = {
+    const withPlayer: WorldState = {
       ...state,
       players: {
         p1: {
@@ -46,10 +47,10 @@ describe('domain reducer', () => {
           y: 0,
           vx: 0,
           vy: 0,
-          hp: 100,
-          energy: 100,
-          facing: 1,
-          currentTool: 'shovel',
+         hp: 100,
+         energy: 100,
+          facing: 1 as const,
+          currentTool: 'shovel' as const,
           selectedMat: null,
           inventory: {
             grass: 0,

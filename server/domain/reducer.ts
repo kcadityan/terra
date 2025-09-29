@@ -1,4 +1,4 @@
-import type { Reducer } from '@terra/event-log/src/types';
+import type { Reducer } from '@terra/event-log';
 import type { WorldState } from './state';
 import type { DomainEvent } from './events';
 
