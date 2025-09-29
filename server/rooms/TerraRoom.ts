@@ -36,9 +36,12 @@ import {
   evaluatePlayerJoined,
 } from '../events/terra-events';
 import { TerraEventBus } from '../events/bus';
-import { createWorldLog, type WorldLog } from '../domain/engine';
+import { createWorldLog, type WorldLog, type WorldLogOptions } from '../domain/engine';
 import { randomUUID } from 'node:crypto';
 import type { DomainEvent } from '../domain/events';
+import { JsonlEventStore, JsonSnapshotStore } from '@terra/event-log';
+import type { WorldState } from '../domain/state';
+import { join } from 'node:path';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -77,7 +80,29 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const seed = DEFAULT_SEED;
     this.world = new WorldStore(seed);
     this.setState(new TerraState(seed));
-    this.worldLog = createWorldLog(this.roomId);
+    const useMemoryStore = process.env.NODE_ENV === 'test';
+    const baseDataDir = process.env.TERRA_EVENT_DIR ?? join(process.cwd(), 'data/events');
+    const baseSnapshotDir = process.env.TERRA_SNAPSHOT_DIR ?? join(process.cwd(), 'data/snapshots');
+
+    const logOptions: WorldLogOptions = {
+      eventStore: useMemoryStore ? undefined : new JsonlEventStore<DomainEvent>(baseDataDir),
+      snapshotStore: useMemoryStore ? undefined : new JsonSnapshotStore<WorldState>(baseSnapshotDir),
+      observers: [
+        (events) => {
+          for (const evt of events) {
+            console.info('[domain-event]', {
+              roomId: this.roomId,
+              type: evt.type,
+              meta: evt.meta ?? {},
+              ts: evt.ts,
+              id: evt.id,
+            });
+          }
+        },
+      ],
+    };
+
+    this.worldLog = createWorldLog(this.roomId, logOptions);
     await this.worldLog.replay();
     this.setupEventBus();
 
@@ -214,17 +239,25 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.bus.emit('world-update', { descriptors: removal.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
 
-    await this.appendDomainEvent('player.inventoryUpdated', {
-      playerId: player.id,
-      inventory: counts,
-    });
+    await this.appendDomainEvent(
+      'player.inventoryUpdated',
+      {
+        playerId: player.id,
+        inventory: counts,
+      },
+      { roomId: this.roomId, actor: player.id, command: 'mine' },
+    );
 
-    await this.appendDomainEvent('player.mined', {
-      playerId: player.id,
-      tileX: message.tileX,
-      tileY: message.tileY,
-      material: removal.removed,
-    });
+    await this.appendDomainEvent(
+      'player.mined',
+      {
+        playerId: player.id,
+        tileX: message.tileX,
+        tileY: message.tileY,
+        material: removal.removed,
+      },
+      { roomId: this.roomId, actor: player.id },
+    );
   }
 
   private async handlePlace(client: Client, message: PlaceBlockMessage) {
@@ -264,17 +297,25 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.bus.emit('world-update', { descriptors: evaluation.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
 
-    await this.appendDomainEvent('player.inventoryUpdated', {
-      playerId: player.id,
-      inventory: counts,
-    });
+    await this.appendDomainEvent(
+      'player.inventoryUpdated',
+      {
+        playerId: player.id,
+        inventory: counts,
+      },
+      { roomId: this.roomId, actor: player.id, command: 'place' },
+    );
 
-    await this.appendDomainEvent('player.placed', {
-      playerId: player.id,
-      tileX: message.tileX,
-      tileY: message.tileY,
-      material: mat,
-    });
+    await this.appendDomainEvent(
+      'player.placed',
+      {
+        playerId: player.id,
+        tileX: message.tileX,
+        tileY: message.tileY,
+        material: mat,
+      },
+      { roomId: this.roomId, actor: player.id },
+    );
   }
 
   private async handleShoot(client: Client, message: ShootMessage) {
@@ -313,14 +354,18 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
 
     this.bus.emit('player-shot', { payload });
 
-    await this.appendDomainEvent('player.shot', {
-      shooterId: shooter.id,
-      originX,
-      originY,
-      dirX,
-      dirY,
-      hitId: payload.hitId,
-    });
+    await this.appendDomainEvent(
+      'player.shot',
+      {
+        shooterId: shooter.id,
+        originX,
+        originY,
+        dirX,
+        dirY,
+        hitId: payload.hitId,
+      },
+      { roomId: this.roomId, actor: shooter.id },
+    );
 
     if (hit) {
       hit.state.hp = 0;
@@ -389,12 +434,16 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const removal = this.world.prepareRemoval(coord);
     if (!removal) return;
     this.bus.emit('world-update', { descriptors: removal.descriptors });
-    void this.appendDomainEvent('player.mined', {
-      playerId: 'environment',
-      tileX,
-      tileY,
-      material: removal.removed,
-    });
+    void this.appendDomainEvent(
+      'player.mined',
+      {
+        playerId: 'environment',
+        tileX,
+        tileY,
+        material: removal.removed,
+      },
+      { roomId: this.roomId, cause: 'bullet-impact' },
+    );
   }
 
   private spawnState(playerIndex: number): PlayerState {
@@ -417,9 +466,10 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   private createDomainEvent<T extends DomainEvent['type']>(
     type: T,
     payload: Omit<Extract<DomainEvent, { type: T }>, 'id' | 'ts' | 'type'>,
+    meta?: Record<string, unknown>,
   ): Extract<DomainEvent, { type: T }> {
     return Object.assign(
-      { id: randomUUID(), ts: Date.now(), type } as const,
+      { id: randomUUID(), ts: Date.now(), type, meta } as const,
       payload,
     ) as Extract<DomainEvent, { type: T }>;
   }
@@ -427,8 +477,9 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   private async appendDomainEvent<T extends DomainEvent['type']>(
     type: T,
     payload: Omit<Extract<DomainEvent, { type: T }>, 'id' | 'ts' | 'type'>,
+    meta?: Record<string, unknown>,
   ) {
-    const domainEvent = this.createDomainEvent(type, payload);
+    const domainEvent = this.createDomainEvent(type, payload, meta);
     try {
       await this.worldLog.append([domainEvent]);
     } catch (err) {

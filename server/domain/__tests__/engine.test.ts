@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createWorldLog } from '../engine';
+import type { DomainEvent } from '../events';
 
 const streamId = 'test-stream';
 
@@ -40,5 +41,24 @@ describe('world log engine', () => {
       { tileX: 1, tileY: 2, material: 'air' },
       { tileX: 3, tileY: 4, material: 'wood' },
     ]);
+  });
+
+  it('notifies observers on append', async () => {
+    const observer = vi.fn();
+    const log = createWorldLog('observer-stream', { observers: [observer] });
+
+    const event: DomainEvent = {
+      id: 'evt-x',
+      ts: 0,
+      type: 'player.mined',
+      playerId: 'p',
+      tileX: 0,
+      tileY: 0,
+      material: 'rock',
+    };
+
+    await log.append([event]);
+
+    expect(observer).toHaveBeenCalledWith([event]);
   });
 });
