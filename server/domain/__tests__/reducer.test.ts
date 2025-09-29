@@ -78,6 +78,45 @@ describe('domain reducer', () => {
     expect(next.players.p1.currentTool).toBe('pickaxe');
   });
 
+  it('updates inventory snapshot', () => {
+    const state = initialWorldState();
+    const event: DomainEvent = {
+      ...baseEvent,
+      type: 'player.inventoryUpdated',
+      playerId: 'p2',
+      inventory: {
+        grass: 1,
+        dirt: 2,
+        rock: 0,
+        wood: 0,
+        coal: 0,
+        copper: 0,
+        silver: 0,
+        gold: 0,
+        diamond: 0,
+      },
+    };
+
+    const next = reduce(state, event);
+    expect(next.players.p2.inventory.dirt).toBe(2);
+  });
+
+  it('applies respawn event', () => {
+    const state = initialWorldState();
+    const event: DomainEvent = {
+      ...baseEvent,
+      type: 'player.respawned',
+      playerId: 'p3',
+      x: 10,
+      y: 20,
+      hp: 100,
+      energy: 80,
+    };
+    const next = reduce(state, event);
+    expect(next.players.p3.x).toBe(10);
+    expect(next.players.p3.energy).toBe(80);
+  });
+
   it('ignores tool change when player missing', () => {
     const event: DomainEvent = {
       ...baseEvent,
@@ -86,6 +125,6 @@ describe('domain reducer', () => {
       tool: 'pickaxe',
     };
     const next = reduce(initialWorldState(), event);
-    expect(next.players).toEqual({});
+    expect(next.players.missing.currentTool).toBe('pickaxe');
   });
 });

@@ -3,6 +3,8 @@ import type { Material, Tool } from '../../src/shared/game-types';
 
 export type PlayerId = string;
 
+export type InventorySnapshot = Record<SolidMaterial, number>;
+
 export interface PlayerSnapshot {
   readonly id: PlayerId;
   readonly x: number;
@@ -14,7 +16,7 @@ export interface PlayerSnapshot {
   readonly facing: 1 | -1;
   readonly currentTool: Tool;
   readonly selectedMat: SolidMaterial | null;
-  readonly inventory: Record<SolidMaterial, number>;
+  readonly inventory: InventorySnapshot;
 }
 
 export interface BlockChangeDescriptor {
@@ -34,5 +36,35 @@ export function initialWorldState(): WorldState {
     tick: 0,
     players: {},
     blocks: [],
+  };
+}
+
+export function emptyInventory(): InventorySnapshot {
+  return {
+    grass: 0,
+    dirt: 0,
+    rock: 0,
+    wood: 0,
+    coal: 0,
+    copper: 0,
+    silver: 0,
+    gold: 0,
+    diamond: 0,
+  };
+}
+
+export function defaultPlayerSnapshot(id: PlayerId): PlayerSnapshot {
+  return {
+    id,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    energy: 100,
+    facing: 1,
+    currentTool: 'shovel',
+    selectedMat: null,
+    inventory: emptyInventory(),
   };
 }

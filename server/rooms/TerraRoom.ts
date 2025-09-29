@@ -214,6 +214,11 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.bus.emit('world-update', { descriptors: removal.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
 
+    await this.appendDomainEvent('player.inventoryUpdated', {
+      playerId: player.id,
+      inventory: counts,
+    });
+
     await this.appendDomainEvent('player.mined', {
       playerId: player.id,
       tileX: message.tileX,
@@ -259,6 +264,11 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.bus.emit('world-update', { descriptors: evaluation.descriptors });
     this.bus.emit('inventory-update', { client, playerId: player.id, counts });
 
+    await this.appendDomainEvent('player.inventoryUpdated', {
+      playerId: player.id,
+      inventory: counts,
+    });
+
     await this.appendDomainEvent('player.placed', {
       playerId: player.id,
       tileX: message.tileX,
@@ -302,6 +312,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     };
 
     this.bus.emit('player-shot', { payload });
+
+    await this.appendDomainEvent('player.shot', {
+      shooterId: shooter.id,
+      originX,
+      originY,
+      dirX,
+      dirY,
+      hitId: payload.hitId,
+    });
 
     if (hit) {
       hit.state.hp = 0;

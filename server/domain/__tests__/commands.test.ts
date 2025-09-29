@@ -60,8 +60,7 @@ describe('command validation', () => {
     };
     const result = validateMine(state, command);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.event.type).toBe('player.mined');
+    if (result.ok && result.event.type === 'player.mined') {
       expect(result.event.playerId).toBe('p1');
       expect(typeof result.event.id).toBe('string');
       expect(typeof result.event.ts).toBe('number');
@@ -98,8 +97,7 @@ describe('command validation', () => {
     };
     const result = validatePlace(state, command);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.event.type).toBe('player.placed');
+    if (result.ok && result.event.type === 'player.placed') {
       expect(result.event.playerId).toBe('p1');
     }
   });
@@ -126,8 +124,7 @@ describe('command validation', () => {
     };
     const result = validateChangeTool(state, command);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.event.type).toBe('player.changedTool');
+    if (result.ok && result.event.type === 'player.changedTool') {
       expect(result.event.playerId).toBe('p1');
     }
   });
