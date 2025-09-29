@@ -12,16 +12,17 @@
     "test": "vitest",
     "typecheck": "tsc --noEmit",
     "test:ci": "npm run typecheck && vitest --run",
-    "verify": "npm run typecheck && npm run test -- --run"
+    "verify": "npm run typecheck && npm run test -- --run",
+    "test:event-log": "vitest --run packages/event-log/tests/engine.test.ts"
   },
   "dependencies": {
-    "nanoid": "^5.0.7",
-    "phaser": "^3.80.0",
-    "ws": "^8.18.0",
-    "colyseus": "^0.15.57",
     "@colyseus/schema": "^2.0.16",
     "@colyseus/ws-transport": "^0.15.3",
-    "colyseus.js": "^0.15.26"
+    "colyseus": "^0.15.57",
+    "colyseus.js": "^0.15.26",
+    "nanoid": "^5.0.7",
+    "phaser": "^3.80.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
@@ -31,5 +32,8 @@
     "typescript": "^5.5.4",
     "vite": "^5.4.0",
     "vitest": "^1.6.0"
-  }
+  },
+  "workspaces": [
+    "packages/event-log"
+  ]
 }
