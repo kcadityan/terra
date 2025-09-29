@@ -26,6 +26,7 @@ import type {
 import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
 import { advanceEnergy } from './state/playerEnergy';
 import { deriveHudState } from './state/hud';
+import { initialClientWorldState, reduceClientEvent } from './state/clientWorld';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -78,6 +79,7 @@ export default class GameScene extends Phaser.Scene {
   private bulletSpeed = RIFLE_BULLET_SPEED;
   private rifleMaxDistance = TILE * RIFLE_RANGE_BLOCKS;
   private lastShotTime = -Infinity;
+  private clientWorld = initialClientWorldState();
 
   // Energy drain timers
   private accumMsMove = 0;
@@ -209,12 +211,17 @@ export default class GameScene extends Phaser.Scene {
     });
 
     this.net.on('worldUpdate', (changes) => {
+      this.clientWorld = reduceClientEvent(this.clientWorld, { type: 'world-update', changes });
       this.applyWorldChanges(changes);
     });
 
     this.net.on('inventoryUpdate', (msg) => {
       if (msg.id !== this.selfId) return;
-      this.inv.setAll(msg.inventory);
+      this.clientWorld = reduceClientEvent(this.clientWorld, {
+        type: 'inventory-update',
+        inventory: msg.inventory,
+      });
+      this.inv.setAll(this.clientWorld.inventory);
       this.toolbar.refreshCounts(this.inv.counts);
       this.ensureValidSelection();
     });
@@ -225,6 +232,7 @@ export default class GameScene extends Phaser.Scene {
     });
 
     this.net.on('playerShot', (msg) => {
+      this.clientWorld = reduceClientEvent(this.clientWorld, { type: 'player-shot', payload: msg });
       this.onPlayerShot(msg);
     });
 

@@ -2,14 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { reduce } from '../server/domain/reducer';
 import { initialWorldState } from '../server/domain/state';
 import type { DomainEvent } from '../server/domain/events';
-import {
-  applyMineAction,
-  evaluatePlacementAction,
-  type MineState,
-  type MineCommand,
-  type PlaceCommand,
-} from '../src/scene/state/actions';
+import { applyMineAction, evaluatePlacementAction, type MineState } from '../src/scene/state/actions';
 import { deriveHudState } from '../src/scene/state/hud';
+import { initialClientWorldState, reduceClientEvent } from '../src/scene/state/clientWorld';
 
 const baseInventory = {
   grass: 0,
@@ -61,8 +56,29 @@ describe('event replay between server and client reducers', () => {
     ];
 
     let serverState = initialWorldState();
+    let clientState = initialClientWorldState();
     for (const event of events) {
       serverState = reduce(serverState, event);
+      switch (event.type) {
+        case 'player.mined':
+          clientState = reduceClientEvent(clientState, {
+            type: 'world-update',
+            changes: [{ tileX: event.tileX, tileY: event.tileY, mat: 'air' }],
+          });
+          break;
+        case 'player.placed':
+          clientState = reduceClientEvent(clientState, {
+            type: 'world-update',
+            changes: [{ tileX: event.tileX, tileY: event.tileY, mat: event.material }],
+          });
+          break;
+        case 'player.inventoryUpdated':
+          clientState = reduceClientEvent(clientState, {
+            type: 'inventory-update',
+            inventory: event.inventory,
+          });
+          break;
+      }
     }
 
     expect(serverState.blocks).toEqual([
@@ -70,23 +86,19 @@ describe('event replay between server and client reducers', () => {
       { tileX: 3, tileY: 4, material: 'rock' },
     ]);
     expect(serverState.players.p1?.inventory.rock).toBe(0);
+    expect(clientState.blocks.get('1,2')).toBe('air');
+    expect(clientState.blocks.get('3,4')).toBe('rock');
+    expect(clientState.inventory.rock).toBe(0);
 
     const mineState: MineState = {
       tool: 'pickaxe',
       lastMiningTool: 'pickaxe',
       target: null,
     };
-    const mineCommand: MineCommand = {
-      type: 'player.mine.cmd',
-      playerId: 'p1',
+    const mineResult = applyMineAction(mineState, {
       tileX: 1,
       tileY: 2,
       material: 'rock',
-    };
-    const mineResult = applyMineAction(mineState, {
-      tileX: mineCommand.tileX,
-      tileY: mineCommand.tileY,
-      material: mineCommand.material,
     });
     expect(mineResult.request).toEqual({ tileX: 1, tileY: 2 });
 
