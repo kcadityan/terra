@@ -147,6 +147,31 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, allowGravity: true });
+    this.physics.add.collider(
+      this.bullets,
+      this.blockGroup,
+      (_bullet, _block) => {
+        const bulletImg = _bullet as Phaser.Physics.Arcade.Image;
+        this.destroyBullet(bulletImg);
+      },
+      undefined,
+      this,
+    );
+
+    const onWorldBounds = (body: Phaser.Physics.Arcade.Body) => {
+      const gameObject = body.gameObject;
+      if (!gameObject) return;
+      if (!this.bullets.contains(gameObject)) return;
+      this.destroyBullet(gameObject as Phaser.Physics.Arcade.Image);
+    };
+    this.physics.world.on('worldbounds', onWorldBounds);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.physics.world.off('worldbounds', onWorldBounds);
+    });
+    this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.alignBulletRotation, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.events.off(Phaser.Scenes.Events.POST_UPDATE, this.alignBulletRotation, this);
+    });
 
     this.cameras.main.setBackgroundColor(0x0e0e12);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
@@ -427,10 +452,9 @@ export default class GameScene extends Phaser.Scene {
 
       if (!placementEval.ok || !placementEval.request) return;
 
-      const body = this.player.body as Phaser.Physics.Arcade.Body;
-      const bodyRect = new Phaser.Geom.Rectangle(body.x, body.y, body.width, body.height);
-      const blockRect = new Phaser.Geom.Rectangle(tileX * TILE, tileY * TILE, TILE, TILE);
-      if (Phaser.Geom.Intersects.RectangleToRectangle(bodyRect, blockRect)) return;
+      const overlap = this.physics.overlapRect(tileX * TILE, tileY * TILE, TILE, TILE, true, true);
+      const overlapsPlayer = overlap.some((candidate) => candidate.gameObject === this.player);
+      if (overlapsPlayer) return;
 
       const existing = this.cm.getBlockDataAtTile(tileX, tileY);
       if (!existing || existing.data.mat !== 'air') return;
@@ -472,56 +496,40 @@ export default class GameScene extends Phaser.Scene {
     bullet.setDepth(450);
     bullet.setActive(true);
     bullet.setVisible(true);
-    bullet.setCollideWorldBounds(false);
+    bullet.setCollideWorldBounds(true);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
-    body.setAllowGravity(false);
+    body.setAllowGravity(true);
+    body.setGravityY(RIFLE_BULLET_GRAVITY);
     const vx = dirX * this.bulletSpeed;
     const vy = dirY * this.bulletSpeed;
     body.setVelocity(vx, vy);
     body.setSize(12, 4);
     body.setOffset(0, 0);
+    body.onWorldBounds = true;
     const maxDistance = distance ?? this.rifleMaxDistance;
-    bullet.setData('maxDistance', maxDistance);
-    bullet.setData('startX', originX);
-    bullet.setData('startY', originY);
+    const lifespanMs = (maxDistance / this.bulletSpeed) * 1000;
+    const existingTimer = bullet.getData('expireEvent') as Phaser.Time.TimerEvent | undefined;
+    existingTimer?.remove();
+    const expireEvent = this.time.delayedCall(lifespanMs, () => this.destroyBullet(bullet));
+    bullet.setData('expireEvent', expireEvent);
     bullet.setData('ownerId', ownerId ?? '');
-    bullet.setData('velX', vx);
-    bullet.setData('velY', vy);
+    bullet.rotation = Math.atan2(vy, vx);
     this.bullets.add(bullet);
   }
 
-  private updateBullets(deltaMs: number) {
-    const dt = deltaMs / 1000;
+  private alignBulletRotation() {
     const bullets = this.bullets.getChildren() as Phaser.Physics.Arcade.Image[];
     for (const bullet of bullets) {
       if (!bullet.active) continue;
       const body = bullet.body as Phaser.Physics.Arcade.Body;
-      let vx = bullet.getData('velX') as number;
-      let vy = bullet.getData('velY') as number;
-      vy += RIFLE_BULLET_GRAVITY * dt;
-      bullet.setData('velY', vy);
-      body.setVelocity(vx, vy);
-      bullet.rotation = Math.atan2(vy, vx);
-
-      const startX = bullet.getData('startX') as number;
-      const startY = bullet.getData('startY') as number;
-      const maxDistance = bullet.getData('maxDistance') as number;
-      const travelled = Phaser.Math.Distance.Between(startX, startY, bullet.x, bullet.y);
-      if (travelled >= maxDistance) {
-        this.destroyBullet(bullet);
-        continue;
-      }
-
-      const tileX = Math.floor(bullet.x / TILE);
-      const tileY = Math.floor(bullet.y / TILE);
-      const info = this.cm.getBlockDataAtTile(tileX, tileY);
-      if (info && info.data.mat !== 'air') {
-        this.destroyBullet(bullet);
-      }
+      bullet.rotation = Math.atan2(body.velocity.y, body.velocity.x);
     }
   }
 
   private destroyBullet(bullet: Phaser.Physics.Arcade.Image) {
+    const expireEvent = bullet.getData('expireEvent') as Phaser.Time.TimerEvent | undefined;
+    expireEvent?.remove();
+    bullet.setData('expireEvent', null);
     this.bullets.remove(bullet, true, true);
   }
 
@@ -702,8 +710,6 @@ export default class GameScene extends Phaser.Scene {
       }
     }
     this.player.setFlipX(this.player.facing < 0);
-
-    this.updateBullets(delta);
 
     if (this.player.hp <= 0) this.showRedDeathFade();
     this.updateBlackout();
