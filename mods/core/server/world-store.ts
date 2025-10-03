@@ -1,6 +1,6 @@
-import { CHUNK_H, Material } from '../src/shared/game-types';
-import { Terrain } from '../src/world/Terrain';
-import type { SolidMaterial } from '../src/shared/protocol';
+import { CHUNK_H, Material } from '../../../engine/shared/game-types';
+import { Terrain } from '../shared/terrain';
+import type { SolidMaterial } from '../../../engine/shared/protocol';
 import { columnFromSampler, computeRemoval, type RemovalComputation } from './world-rules';
 import {
   type TileCoord,
@@ -8,8 +8,8 @@ import {
   createTileY,
   createPlacementDescriptor,
   createBlockChangeDescriptor,
-} from '../src/shared/world-primitives';
-import type { BlockChangeDescriptor } from '../src/shared/world-primitives';
+} from '../../../engine/shared/world-primitives';
+import type { BlockChangeDescriptor } from '../../../engine/shared/world-primitives';
 
 function key(coord: TileCoord): string {
   return `${coord.x},${coord.y}`;

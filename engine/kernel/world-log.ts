@@ -1,7 +1,6 @@
-import { LogEngine, MemoryEventStore, MemorySnapshotStore } from '@terra/event-log';
-import type { EventStore, SnapshotStore } from '@terra/event-log';
-import { initialWorldState, type WorldState } from './state';
+import { LogEngine, MemoryEventStore, MemorySnapshotStore, type EventStore, type SnapshotStore } from '@terra/event-log';
 import { reduce } from './reducer';
+import { initialWorldState, type WorldState } from './state';
 import type { DomainEvent } from './events';
 
 export interface WorldLog {
@@ -11,18 +10,18 @@ export interface WorldLog {
 }
 
 export interface WorldLogOptions {
-  eventStore?: EventStore<DomainEvent>;
-  snapshotStore?: SnapshotStore<WorldState>;
-  observers?: Array<(events: ReadonlyArray<DomainEvent>) => void>;
+  readonly eventStore?: EventStore<DomainEvent>;
+  readonly snapshotStore?: SnapshotStore<WorldState>;
+  readonly observers?: ReadonlyArray<(events: ReadonlyArray<DomainEvent>) => void>;
 }
 
 class WorldLogImpl implements WorldLog {
   private engine: LogEngine<WorldState, DomainEvent>;
   private state: WorldState;
   private lastSeq = 0;
-  private observers: Array<(events: ReadonlyArray<DomainEvent>) => void>;
+  private observers: ReadonlyArray<(events: ReadonlyArray<DomainEvent>) => void>;
 
-  constructor(private stream: string, options?: WorldLogOptions) {
+  constructor(private readonly stream: string, options?: WorldLogOptions) {
     const store = options?.eventStore ?? new MemoryEventStore<DomainEvent>();
     const snapshots = options?.snapshotStore ?? new MemorySnapshotStore<WorldState>();
     this.engine = new LogEngine(store, reduce, snapshots, {
@@ -54,6 +53,5 @@ class WorldLogImpl implements WorldLog {
   }
 }
 
-export function createWorldLog(stream: string, options?: WorldLogOptions): WorldLog {
-  return new WorldLogImpl(stream, options);
-}
+export const createWorldLog = (stream: string, options?: WorldLogOptions): WorldLog =>
+  new WorldLogImpl(stream, options);

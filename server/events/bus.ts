@@ -1,6 +1,6 @@
 import type { Client } from 'colyseus';
-import type { BlockChangeDescriptor } from '../../src/shared/world-primitives';
-import type { InventoryCounts, PlayerShotMessage } from '../../src/shared/protocol';
+import type { BlockChangeDescriptor } from '../../engine/shared/world-primitives';
+import type { InventoryCounts, PlayerShotMessage } from '../../engine/shared/protocol';
 
 export type TerraBusPayloads = {
   'world-update': { descriptors: BlockChangeDescriptor[]; source?: Client | null };

@@ -1,0 +1,191 @@
+🔥 Master Prompt for LLM (Domain Pipelines + Parallelism + Dependent Types)
+
+Role & Goal
+You are an expert TypeScript functional programmer. Generate production-grade code in a pure functional style with:
+
+Referential transparency
+
+Immutability
+
+Algebraic data types (ADTs)
+
+Policies-as-data (JSON + schema)
+
+No classes, no mutation in domain
+
+Domain-readable pipelines in F# style (|>)
+
+Phased design: Validation, Enrichment, Decision, Apply
+
+Parallelism where order doesn’t matter (validation/enrichment)
+
+Commutative/idempotent merges for safe parallel results
+
+Dependent-type style safety (Idris-like, inside TS): use types to encode state progression, proofs of validity, and policy guarantees.
+
+Pipeline requirements
+
+Pipelines must read in domain language (e.g. isValid, hasEnergy, getMaterial, ensureMineable).
+
+All steps are unary functions of the form Ctx -> Either<Err, CtxN> (note: CtxN may be a different type than Ctx, representing progression).
+
+Sub-pipelines are allowed: a step can itself be a pipeline, as long as it has the same input/output shape.
+
+Validation phase: may use Validation (accumulate errors), order-independent, can be run in parallel.
+
+Enrichment phase: may run multiple enrichers in parallel using TaskEither or Effect.all. Merge results with commutative/idempotent rules.
+
+Decision phase: minimal and sequential (depends on validation+enrichment).
+
+Apply phase: fold events into state; where possible, fold commutative deltas (inventory additions, energy changes) into a single accumulator to reduce order sensitivity.
+
+Dependent-type style requirements
+
+Use branded types to distinguish logically different values that share runtime representation.
+
+type Coord2 = number & { readonly _tag: "Coord2" };
+
+
+
+Use phantom type indices on contexts to encode progression:
+type MineCtx<Stage> = { state: State; at: Coord2; policy: Policy; mat?: Material } & { stage: Stage };
+
+
+Example:
+
+MineCtx<"Start"> before any checks
+
+MineCtx<"WithMaterial"> after getMaterial
+
+Compiler enforces correct ordering of steps.
+
+Use conditional types and literal unions to narrow results:
+
+type EnsureMineable<C extends MineCtx<"WithMaterial">> = C & { mineable: true };
+
+Use zod schema inference to ensure policy JSON shapes match compile-time types.
+
+Encode impossible states as unrepresentable in types (Idris-style principle).
+Error handling
+
+Default: fail-fast with Either (then combinator). First error stops the pipeline.
+
+For validation: allow order-independent accumulation with Validation (Either with NonEmptyArray<Err>`).
+
+For “warn & continue”: provide combinators like recover (turn error into annotated context) or when (conditionally apply a step).
+
+Parallelism
+
+Validation: run all rules in parallel; accumulate errors with Validation.
+
+Enrichment: run independent enrichers in parallel using TaskEither or Effect.all. Merge results with commutative/idempotent rules.
+
+Decision: sequential, minimal.
+
+Apply: use commutative folds where possible (e.g., summing inventory/energy deltas).
+
+Architecture pattern
+
+Domain is pure: no I/O, no mutation, no classes. Only values and functions.
+
+Commands/Events split:
+
+decide(State, Command) -> Either<Err, Event[]>
+
+evolve(State, Event) -> State
+
+Policies as data: all rules live in JSON + schema.
+
+Single source of truth: enums like Material defined once (materials.ts).
+
+Context objects: parameterized with phantom types (Idris-like) to enforce valid sequencing.
+
+Files as modules: one concept per file (materials.ts, steps.mine.ts, pipelines.decide.ts).
+
+Tech stack
+
+fp-ts v2: pipe, Option, Either, Validation, TaskEither
+
+ts-pattern: for exhaustive pattern matching in reducers
+
+zod or @effect/schema for runtime validation of policies
+
+Effect-TS optional for DI/concurrency/runtime
+
+Custom DSL combinators:
+
+then → fail-fast chaining
+
+thenAll / Validation → accumulate multiple errors in parallel
+
+recover, when → soft rules
+
+parallelEnrich → run enrichers in parallel and merge results
+
+Type-level patterns: branded types, phantom types, literal unions, context indices
+
+Deliverables
+
+Folder tree of the generated modules
+
+Domain types (State, Command, Event, Err, Material, phantom-indexed contexts)
+
+Policies: JSON + schema
+
+Step functions: one-liner, domain-named, unary, correctly typed with dependent-type style
+
+Pipelines: domain-readable, possibly with sub-pipelines, split into phases
+
+Combinators: then, thenAll, recover, when, parallelEnrich
+
+Tests/examples:
+
+Fail-fast (Either)
+
+Accumulate-all (Validation)
+
+Parallel enrichment (TaskEither.all)
+
+Type errors on illegal reordering (MineCtx<"Start"> can’t go straight to ensureMineable)
+
+README: explain phases, parallelism, dependent-type style, and how to insert steps safely.
+
+Example expected style
+
+// Phantom-indexed contexts (dependent style)
+type MineStage = "Start" | "Validated" | "WithMaterial" | "Mineable";
+type MineCtx<S extends MineStage> = {
+  state: State;
+  at: Coord2;
+  policy: Policy;
+  mat?: Material;
+  stage: S;
+};
+
+// Steps
+export const isValid = (c: MineCtx<"Start">): Either<Err, MineCtx<"Validated">> =>
+  inBounds(c.state.world, c.at) ? ok({ ...c, stage: "Validated" }) : fail("OUT_OF_BOUNDS");
+
+export const getMaterial = (c: MineCtx<"Validated">): Either<Err, MineCtx<"WithMaterial">> =>
+  ok({ ...c, stage: "WithMaterial", mat: Material.fromId(getId(c.state.world, c.at)) });
+
+export const ensureMineable = (c: MineCtx<"WithMaterial">): Either<Err, MineCtx<"Mineable">> =>
+  c.policy.mineable[c.mat!] ? ok({ ...c, stage: "Mineable" }) : fail("NOT_MINEABLE");
+
+// Pipeline (compiler enforces order)
+const decideMine = (policy: Policy) => (s: State, at: Coord2) =>
+  startMineCtx(s, at, policy)              // MineCtx<"Start">
+  |> isValid                               // -> MineCtx<"Validated">
+  |> then(getMaterial)                     // -> MineCtx<"WithMaterial">
+  |> then(ensureMineable)                  // -> MineCtx<"Mineable">
+  |> then(toEvents);                       // -> Either<Err, Event[]>
+
+✅ With this version, the LLM will now:
+
+Generate pipelines readable to domain experts
+
+Encode phase separation (Validation/Enrichment/Decision/Apply)
+
+Make Validation/Enrichment parallelizable
+
+Ensure safety by dependent-type style contexts (illegal orderings fail at compile time)

@@ -1,6 +1,6 @@
-import { strikesFor } from '../../world/Materials';
-import type { Material, Tool } from '../../shared/game-types';
-import type { SolidMaterial } from '../../shared/protocol';
+import { strikesFor } from '../../../mods/core/shared/materials';
+import type { Material, Tool } from '../../../engine/shared/game-types';
+import type { SolidMaterial } from '../../../engine/shared/protocol';
 
 export type MiningTool = Exclude<Tool, 'rifle'>;
 

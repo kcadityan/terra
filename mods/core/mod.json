@@ -1,0 +1,10 @@
+{
+  "id": "core.terra",
+  "version": "1.0.0",
+  "server": {
+    "entry": "./server/index.ts"
+  },
+  "client": {
+    "entry": "./client/index.ts"
+  }
+}

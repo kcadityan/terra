@@ -1,10 +1,10 @@
-import type { Material } from '../shared/game-types';
-import type { InventoryCounts } from '../shared/protocol';
+import type { Material } from '../../engine/shared/game-types';
+import type { InventoryCounts } from '../../engine/shared/protocol';
 import {
   MATERIAL_WEIGHT,
   SOLID_MATERIALS,
   type SolidMaterial,
-} from '../world/Materials';
+} from '../../mods/core/shared/materials';
 
 function emptyCounts(): Record<SolidMaterial, number> {
   const counts = {} as Record<SolidMaterial, number>;
@@ -18,7 +18,8 @@ export class Inventory {
 
   add(mat: Material, n = 1) {
     if (mat === 'air') return;
-    this.counts[mat] += n;
+    const key = mat as SolidMaterial;
+    this.counts[key] += n;
   }
 
   remove(mat: SolidMaterial, n = 1) {
@@ -41,7 +42,7 @@ export class Inventory {
 
   toDisplayList(): Array<{ mat: SolidMaterial; count: number }> {
     return SOLID_MATERIALS
-      .map((mat) => ({ mat, count: this.counts[mat] }))
+      .map((mat: SolidMaterial) => ({ mat, count: this.counts[mat] }))
       .filter((entry) => entry.count > 0);
   }
 }

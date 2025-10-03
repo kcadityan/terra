@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyMineAction, evaluatePlacementAction, type MineState } from '../actions';
-import type { InventoryCounts } from '../../../shared/protocol';
+import type { InventoryCounts } from '../../../../engine/shared/protocol';
 
 const baseMineState: MineState = {
   tool: 'pickaxe',

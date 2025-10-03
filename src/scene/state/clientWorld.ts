@@ -1,5 +1,5 @@
-import type { BlockChange, InventoryCounts, PlayerShotMessage } from '../../shared/protocol';
-import type { Material } from '../../shared/game-types';
+import type { BlockChange, InventoryCounts, PlayerShotMessage } from '../../../engine/shared/protocol';
+import type { Material } from '../../../engine/shared/game-types';
 
 export interface ClientWorldState {
   readonly blocks: Map<string, Material>;

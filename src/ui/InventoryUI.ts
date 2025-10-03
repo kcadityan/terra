@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import type { Material } from '../shared/game-types';
+import type { Material } from '../../engine/shared/game-types';
 import { Inventory } from '../player/Inventory';
 
 /**

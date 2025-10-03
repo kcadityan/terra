@@ -1,12 +1,12 @@
-import { CHUNK_H, type Material } from '../src/shared/game-types';
-import type { SolidMaterial } from '../src/shared/protocol';
+import { CHUNK_H, type Material } from '../../../engine/shared/game-types';
+import type { SolidMaterial } from '../../../engine/shared/protocol';
 import {
   createTileCoord,
   createRemovalDescriptor,
   createPlacementDescriptor,
   type BlockChangeDescriptor,
-} from '../src/shared/world-primitives';
-import { MATERIAL_WEIGHT, MATERIAL_STICKINESS } from '../src/world/Materials';
+} from '../../../engine/shared/world-primitives';
+import { MATERIAL_WEIGHT, MATERIAL_STICKINESS } from '../shared/materials';
 
 export interface RemovalComputation {
   removed: SolidMaterial;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeRemoval, columnFromSampler } from '../world-rules';
-import { CHUNK_H, type Material } from '../../src/shared/game-types';
+import { computeRemoval, columnFromSampler } from '../../mods/core/server/world-rules';
+import { CHUNK_H, type Material } from '../../engine/shared/game-types';
 
 function columnWithSurface(): Material[] {
   const column = Array<Material>(CHUNK_H).fill('air');

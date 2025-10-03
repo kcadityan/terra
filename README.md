@@ -38,6 +38,13 @@ Quick sanity check for multiplayer:
 
 This is useful if you want to proxy the client through another tool or deploy the server separately.
 
+## Architecture
+
+- **Kernel (`engine/kernel`)** — deterministic world state, syscalls, and WorldLog, exposed via capability-based APIs.
+- **Shared SDK (`engine/shared`)** — common types (protocol, game constants, specs) consumed by kernel, client, and mods.
+- **Modules (`mods/*`)** — feature packs that register materials, rules, and renderers (e.g., `mods/core`).
+- **Client Runtime (`engine/client`)** — SceneAPI adapters and renderer registry; the Phaser adapter powers `GameScene`.
+
 
 ### Customising ports / endpoints
 
@@ -90,4 +97,4 @@ Ensure port 3030 is reachable wherever clients are connecting from; the browser 
 - If clients cannot connect, verify the WebSocket port (3030) is open and not blocked by a firewall.
 - If you see `EADDRINUSE: address already in use`, stop the previous server (Ctrl+C in that terminal) or relaunch with a different port as described above.
 - When deploying behind a proxy, configure WebSocket forwarding on `/` so traffic reaches the Node server.
-- To change ports permanently in code, update `DEFAULT_PORT` in `src/shared/protocol.ts` (client default) and mirror the value in your deployment configuration.
+- To change ports permanently in code, update `DEFAULT_PORT` in `engine/shared/protocol.ts` (client default) and mirror the value in your deployment configuration.

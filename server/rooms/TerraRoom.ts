@@ -14,7 +14,7 @@ import {
   type InventoryCounts,
   type ShootMessage,
   type PlayerShotMessage,
-} from '../../src/shared/protocol';
+} from '../../engine/shared/protocol';
 import {
   TILE,
   CHUNK_H,
@@ -24,24 +24,24 @@ import {
   RIFLE_BULLET_SPEED,
   WORLD_GRAVITY,
   RIFLE_BULLET_GRAVITY,
-} from '../../src/shared/game-types';
-import { WorldStore } from '../world-store';
+} from '../../engine/shared/game-types';
+import { WorldStore } from '../../mods/core/server/world-store';
 import { TerraState, PlayerSchema, BlockSchema, serializePlayers } from '../state/TerraState';
-import type { TerrainProfile } from '../../src/world/Terrain';
-import { createTileCoord, descriptorToProtocol } from '../../src/shared/world-primitives';
+import type { TerrainProfile } from '../../mods/core/shared/terrain';
+import { createTileCoord, descriptorToProtocol } from '../../engine/shared/world-primitives';
 import {
   evaluateMine,
   evaluatePlace,
   evaluateShoot,
   evaluatePlayerJoined,
-} from '../events/terra-events';
+} from '../../mods/core/server/terra-events';
 import { TerraEventBus } from '../events/bus';
-import { createWorldLog, type WorldLog, type WorldLogOptions } from '../domain/engine';
 import { randomUUID } from 'node:crypto';
-import type { DomainEvent } from '../domain/events';
-import { JsonlEventStore, JsonSnapshotStore } from '@terra/event-log';
-import type { WorldState } from '../domain/state';
-import { join } from 'node:path';
+import type { Kernel } from '../../engine/kernel';
+import type { DomainEvent } from '../../engine/kernel/events';
+import type { WorldLog } from '../../engine/kernel/world-log';
+import { getServerContext } from '../context';
+import { fromMaterialId, toMaterialId } from '../../mods/core/shared/materials';
 
 const PLAYER_ID_LENGTH = 8;
 const RIFLE_RANGE = TILE * RIFLE_RANGE_BLOCKS;
@@ -75,34 +75,15 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
   private lastShotAt = new Map<string, number>();
   private bus = new TerraEventBus();
   private worldLog!: WorldLog;
+  private kernel!: Kernel;
 
   async onCreate() {
+    const { kernel } = getServerContext();
+    this.kernel = kernel;
+    this.worldLog = kernel.worldLog;
     const seed = DEFAULT_SEED;
     this.world = new WorldStore(seed);
     this.setState(new TerraState(seed));
-    const useMemoryStore = process.env.NODE_ENV === 'test';
-    const baseDataDir = process.env.TERRA_EVENT_DIR ?? join(process.cwd(), 'data/events');
-    const baseSnapshotDir = process.env.TERRA_SNAPSHOT_DIR ?? join(process.cwd(), 'data/snapshots');
-
-    const logOptions: WorldLogOptions = {
-      eventStore: useMemoryStore ? undefined : new JsonlEventStore<DomainEvent>(baseDataDir),
-      snapshotStore: useMemoryStore ? undefined : new JsonSnapshotStore<WorldState>(baseSnapshotDir),
-      observers: [
-        (events) => {
-          for (const evt of events) {
-            console.info('[domain-event]', {
-              roomId: this.roomId,
-              type: evt.type,
-              meta: evt.meta ?? {},
-              ts: evt.ts,
-              id: evt.id,
-            });
-          }
-        },
-      ],
-    };
-
-    this.worldLog = createWorldLog(this.roomId, logOptions);
     await this.worldLog.replay();
     this.setupEventBus();
 
@@ -233,7 +214,21 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     }
 
     const { removal } = evaluation;
-    player.inventory.add(removal.removed, 1);
+    const tool = player.state.currentTool;
+    const registry = this.kernel.getRegistry();
+    const materialId = toMaterialId(removal.removed);
+    const rule = registry.strikeRules.get(tool)?.get(materialId);
+    if (!rule || rule.outcome.kind !== 'Removed') {
+      this.bus.emit('action-denied', { client, reason: 'mine-block/forbidden' });
+      return;
+    }
+
+    for (const drop of rule.outcome.drops) {
+      const amount = drop.qty;
+      const dropMat = fromMaterialId(drop.id) ?? null;
+      if (!dropMat) continue;
+      player.inventory.add(dropMat, amount);
+    }
     const counts = player.inventory.toCounts();
 
     this.bus.emit('world-update', { descriptors: removal.descriptors });
@@ -338,7 +333,8 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     const originX = message.originX;
     const originY = message.originY;
 
-    const hit = this.findBulletHit(shooter, originX, originY, dirX, dirY);
+    const impact = this.findBulletImpact(shooter, originX, originY, dirX, dirY);
+    const hit = impact.player;
 
     this.lastShotAt.set(client.sessionId, now);
 
@@ -367,25 +363,30 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       { roomId: this.roomId, actor: shooter.id },
     );
 
+    if (impact.block) {
+      await this.damageBlock(impact.block.tileX, impact.block.tileY);
+    }
+
     if (hit) {
       hit.state.hp = 0;
       this.broadcastPlayerState(hit);
     }
   }
 
-  private findBulletHit(
+  private findBulletImpact(
     shooter: PlayerSchema,
     originX: number,
     originY: number,
     dirX: number,
     dirY: number,
-  ): PlayerSchema | null {
+  ): { player: PlayerSchema | null; block: { tileX: number; tileY: number } | null } {
     const speed = RIFLE_BULLET_SPEED;
     const gravity = RIFLE_BULLET_GRAVITY;
     const maxTime = (RIFLE_RANGE / speed) * 2; // generous upper bound accounting for arcs
 
     let closestPlayer: PlayerSchema | null = null;
     let closestDistance = Infinity;
+    let blockHit: { tileX: number; tileY: number } | null = null;
 
     for (let t = 0; t <= maxTime; t += BULLET_STEP_SECONDS) {
       const x = originX + dirX * speed * t;
@@ -398,7 +399,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       const tileY = Math.floor(y / TILE);
       const mat = this.world.actualMaterial(tileX, tileY);
       if (mat !== 'air') {
-        this.damageBlock(tileX, tileY);
+        blockHit = { tileX, tileY };
         break;
       }
 
@@ -417,7 +418,7 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
       if (closestPlayer) break;
     }
 
-    return closestPlayer;
+    return { player: closestPlayer, block: blockHit };
   }
 
   private broadcastPlayerState(player: PlayerSchema) {
@@ -429,12 +430,12 @@ export class TerraRoom extends Colyseus.Room<TerraState> {
     this.broadcastExcept(null, payload);
   }
 
-  private damageBlock(tileX: number, tileY: number) {
+  private async damageBlock(tileX: number, tileY: number) {
     const coord = createTileCoord(tileX, tileY);
     const removal = this.world.prepareRemoval(coord);
     if (!removal) return;
     this.bus.emit('world-update', { descriptors: removal.descriptors });
-    void this.appendDomainEvent(
+    await this.appendDomainEvent(
       'player.mined',
       {
         playerId: 'environment',

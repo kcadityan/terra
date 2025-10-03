@@ -1,5 +1,5 @@
-import type { Material } from '../shared/game-types';
-import { valueNoise1D, hash01 } from '../utils/Rand';
+import type { Material } from '../../../engine/shared/game-types';
+import { valueNoise1D, hash01 } from './utils/rand';
 
 export interface TerrainProfile {
   groundY: number; // surface tile Y

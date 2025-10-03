@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { Inventory } from '../player/Inventory';
-import type { SolidMaterial } from '../shared/protocol';
-import type { Tool } from '../shared/game-types';
+import type { SolidMaterial } from '../../engine/shared/protocol';
+import type { Tool } from '../../engine/shared/game-types';
 
 export type ToolbarItemDescriptor =
   | { kind: 'tool'; tool: Tool; label: string }

@@ -1,4 +1,4 @@
-import type { Material, Tool } from '../shared/game-types';
+import type { Material, Tool } from '../../../engine/shared/game-types';
 
 export type SolidMaterial = Exclude<Material, 'air'>;
 
@@ -77,3 +77,23 @@ export function strikesFor(tool: Tool, mat: Material): number {
   const hardness = MATERIAL_HARDNESS[mat] ?? 2;
   return isCorrectTool(tool, mat) ? hardness : hardness * 2;
 }
+
+export const MATERIAL_REGISTRY_IDS: Record<SolidMaterial, string> = {
+  grass: 'core.terra.material.grass',
+  dirt: 'core.terra.material.dirt',
+  rock: 'core.terra.material.rock',
+  wood: 'core.terra.material.wood',
+  coal: 'core.terra.material.coal',
+  copper: 'core.terra.material.copper',
+  silver: 'core.terra.material.silver',
+  gold: 'core.terra.material.gold',
+  diamond: 'core.terra.material.diamond',
+};
+
+const MATERIAL_ID_LOOKUP = Object.fromEntries(
+  Object.entries(MATERIAL_REGISTRY_IDS).map(([mat, id]) => [id, mat]),
+) as Record<string, SolidMaterial>;
+
+export const toMaterialId = (mat: SolidMaterial): string => MATERIAL_REGISTRY_IDS[mat];
+
+export const fromMaterialId = (id: string): SolidMaterial | null => MATERIAL_ID_LOOKUP[id] ?? null;

@@ -1,4 +1,4 @@
-import type { SolidMaterial } from '../../shared/protocol';
+import type { SolidMaterial } from '../../../engine/shared/protocol';
 
 export interface HudInputs {
   hp: number;

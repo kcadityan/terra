@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { WorldStore } from '../world-store';
-import { DEFAULT_SEED, CHUNK_H } from '../../src/shared/game-types';
+import { WorldStore } from '../../mods/core/server/world-store';
+import { DEFAULT_SEED, CHUNK_H } from '../../engine/shared/game-types';
 import {
   createTileCoord,
   descriptorToProtocol,
-} from '../../src/shared/world-primitives';
+} from '../../engine/shared/world-primitives';
 
 function findFirstAirCoord(store: WorldStore, tileX: number) {
   for (let y = 0; y < CHUNK_H; y++) {

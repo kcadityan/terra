@@ -1,14 +1,14 @@
 import Phaser from 'phaser';
-import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../shared/game-types';
-import type { Material } from '../shared/game-types';
-import { Terrain } from './Terrain';
+import { CHUNK_W, CHUNK_H, TILE, type BlockData, type ChunkKey } from '../../engine/shared/game-types';
+import type { Material } from '../../engine/shared/game-types';
+import { Terrain } from '../../mods/core/shared/terrain';
 import {
   MATERIAL_COLOR,
   MATERIAL_WEIGHT,
   MATERIAL_STICKINESS,
   type SolidMaterial,
-} from './Materials';
-import type { BlockChange } from '../shared/protocol';
+} from '../../mods/core/shared/materials';
+import type { BlockChange } from '../../engine/shared/protocol';
 
 export interface Chunk {
   cx: number; // chunk index along X

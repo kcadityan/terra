@@ -8,7 +8,7 @@ import {
   type ServerMessage,
   type WelcomeMessage,
   type PlayerShotMessage,
-} from '../shared/protocol';
+} from '../../engine/shared/protocol';
 
 interface EventMap {
   welcome: WelcomeMessage;

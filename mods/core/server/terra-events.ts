@@ -1,7 +1,7 @@
-import type { SolidMaterial, InventoryCounts } from '../../src/shared/protocol';
-import type { BlockChangeDescriptor, TileCoord } from '../../src/shared/world-primitives';
-import type { WorldStore } from '../world-store';
-import type { RemovalComputation } from '../world-rules';
+import type { SolidMaterial, InventoryCounts } from '../../../engine/shared/protocol';
+import type { BlockChangeDescriptor, TileCoord } from '../../../engine/shared/world-primitives';
+import type { WorldStore } from './world-store';
+import type { RemovalComputation } from './world-rules';
 
 export type TerraEvent =
   | { type: 'player-joined' }

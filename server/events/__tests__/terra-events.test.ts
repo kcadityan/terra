@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateMine, evaluatePlace, evaluateShoot } from '../terra-events';
-import { WorldStore } from '../../world-store';
-import { DEFAULT_SEED } from '../../../src/shared/game-types';
-import { createTileCoord } from '../../../src/shared/world-primitives';
+import { evaluateMine, evaluatePlace, evaluateShoot } from '../../../mods/core/server/terra-events';
+import { WorldStore } from '../../../mods/core/server/world-store';
+import { DEFAULT_SEED } from '../../../engine/shared/game-types';
+import { createTileCoord } from '../../../engine/shared/world-primitives';
 
 function makeWorldWithBlock() {
   const world = new WorldStore(DEFAULT_SEED);

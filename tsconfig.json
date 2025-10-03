@@ -24,6 +24,8 @@
   },
   "include": [
     "src",
-    "server"
+    "server",
+    "engine",
+    "mods"
   ]
 }

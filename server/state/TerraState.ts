@@ -1,6 +1,6 @@
 import { Schema, MapSchema, type } from '@colyseus/schema';
-import type { InventoryCounts, PlayerInit, PlayerState, SolidMaterial } from '../../src/shared/protocol';
-import type { Material } from '../../src/shared/game-types';
+import type { InventoryCounts, PlayerInit, PlayerState, SolidMaterial } from '../../engine/shared/protocol';
+import type { Material } from '../../engine/shared/game-types';
 
 export class InventorySchema extends Schema {
   @type('number') grass = 0;

@@ -1,5 +1,5 @@
-import type { Tool, Material } from '../shared/game-types';
-import { strikesFor } from '../world/Materials';
+import type { Tool, Material } from '../../engine/shared/game-types';
+import { strikesFor } from '../../mods/core/shared/materials';
 
 export class ToolSystem {
   current: Tool = 'shovel';

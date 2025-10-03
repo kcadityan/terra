@@ -8,7 +8,7 @@ import {
   RIFLE_COOLDOWN_MS,
   RIFLE_BULLET_SPEED,
   RIFLE_BULLET_GRAVITY,
-} from '../shared/game-types';
+} from '../../engine/shared/game-types';
 import { ChunkManager } from '../world/ChunkManager';
 import { Player } from '../player/Player';
 import { Inventory } from '../player/Inventory';
@@ -22,11 +22,15 @@ import type {
   PlayerShotMessage,
   SolidMaterial,
   InventoryCounts,
-} from '../shared/protocol';
+} from '../../engine/shared/protocol';
 import { applyMineAction, evaluatePlacementAction, type MineState } from './state/actions';
 import { advanceEnergy } from './state/playerEnergy';
 import { deriveHudState } from './state/hud';
 import { initialClientWorldState, reduceClientEvent } from './state/clientWorld';
+import { createClientRuntime, PhaserSceneApi, type ClientRuntime } from '../../engine/client';
+import { coreClientModule } from '../../mods/core/client';
+
+const PLAYER_KIND = 'core.terra.player';
 
 export default class GameScene extends Phaser.Scene {
   private cm!: ChunkManager;
@@ -89,7 +93,9 @@ export default class GameScene extends Phaser.Scene {
   // Networking
   private net = new NetworkClient();
   private selfId: string | null = null;
-  private remotePlayers = new Map<string, Player>();
+  private runtime!: ClientRuntime;
+  private runtimeReady!: Promise<void>;
+  private remotePlayers = new Map<string, PlayerState>();
   private stateSendAccum = 0;
 
   constructor() { super('Game'); }
@@ -104,6 +110,10 @@ export default class GameScene extends Phaser.Scene {
       g.generateTexture('player', 20, 28);
       g.destroy();
     }
+
+    this.runtimeReady = this.setupRuntime().catch((err) => {
+      console.error('[client] runtime init failed', err);
+    });
 
     this.blockGroup = this.physics.add.staticGroup();
 
@@ -203,6 +213,12 @@ export default class GameScene extends Phaser.Scene {
     this.initNetwork();
   }
 
+  private async setupRuntime() {
+    const sceneApi = new PhaserSceneApi(this);
+    this.runtime = createClientRuntime(sceneApi);
+    await this.runtime.loadModule(coreClientModule);
+  }
+
   private initNetwork() {
     this.net.on('welcome', (msg) => {
       this.selfId = msg.selfId;
@@ -216,14 +232,14 @@ export default class GameScene extends Phaser.Scene {
         if (info.id === this.selfId) {
           this.hydrateSelf(info);
         } else {
-          this.spawnRemote(info);
+          void this.spawnRemote(info);
         }
       });
     });
 
     this.net.on('playerJoined', (info) => {
       if (info.id === this.selfId) return;
-      this.spawnRemote(info);
+      void this.spawnRemote(info);
     });
 
     this.net.on('playerLeft', (id) => {
@@ -232,7 +248,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.net.on('playerState', ({ id, state }) => {
       if (id === this.selfId) return;
-      this.updateRemoteState(id, state);
+      void this.spawnRemote({ id, state, inventory: { ...EMPTY_COUNTS } });
     });
 
     this.net.on('worldUpdate', (changes) => {
@@ -331,36 +347,26 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
-  private spawnRemote(info: PlayerInit) {
-    if (this.remotePlayers.has(info.id)) {
-      this.updateRemoteState(info.id, info.state);
-      return;
+  private async spawnRemote(info: PlayerInit): Promise<void> {
+    await this.runtimeReady;
+    if (!this.runtime) return;
+    const wasMounted = this.remotePlayers.has(info.id);
+    this.remotePlayers.set(info.id, info.state);
+    if (!wasMounted) {
+      await this.runtime.mount(PLAYER_KIND, info.id);
     }
-    const remote = new Player(this, info.state.x, info.state.y);
-    const body = remote.body as Phaser.Physics.Arcade.Body;
-    body.setAllowGravity(false);
-    body.moves = false;
-    body.enable = false;
-    remote.setTint(0x88ccff);
-    remote.setAlpha(0.9);
-    this.remotePlayers.set(info.id, remote);
+    this.runtime.update(info.id, {
+      x: info.state.x,
+      y: info.state.y,
+      facing: info.state.facing,
+      speed: Math.hypot(info.state.vx ?? 0, info.state.vy ?? 0),
+    });
   }
 
   private removeRemote(id: string) {
-    const p = this.remotePlayers.get(id);
-    if (!p) return;
-    p.destroy();
+    if (!this.remotePlayers.has(id)) return;
+    this.runtime?.unmount(id);
     this.remotePlayers.delete(id);
-  }
-
-  private updateRemoteState(id: string, state: PlayerState) {
-    const remote = this.remotePlayers.get(id);
-    if (!remote) {
-      this.spawnRemote({ id, state, inventory: { ...EMPTY_COUNTS } });
-      return;
-    }
-    remote.setPosition(state.x, state.y);
-    remote.setFlipX(state.facing < 0);
   }
 
   private applyWorldChanges(changes: BlockChange[]) {

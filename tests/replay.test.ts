@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { reduce } from '../server/domain/reducer';
-import { initialWorldState } from '../server/domain/state';
-import type { DomainEvent } from '../server/domain/events';
+import { reduce } from '../engine/kernel/reducer';
+import { initialWorldState } from '../engine/kernel/state';
+import type { DomainEvent } from '../engine/kernel/events';
 import { applyMineAction, evaluatePlacementAction, type MineState } from '../src/scene/state/actions';
 import { deriveHudState } from '../src/scene/state/hud';
 import { initialClientWorldState, reduceClientEvent } from '../src/scene/state/clientWorld';
